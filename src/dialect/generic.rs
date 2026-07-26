@@ -281,6 +281,10 @@ impl Dialect for GenericDialect {
         true
     }
 
+    fn supports_scalar_with(&self) -> bool {
+        true
+    }
+
     fn supports_interpolate(&self) -> bool {
         true
     }

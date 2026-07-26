@@ -146,6 +146,11 @@ impl Dialect for ClickHouseDialect {
         true
     }
 
+    /// See <https://clickhouse.com/docs/sql-reference/statements/select/with>
+    fn supports_scalar_with(&self) -> bool {
+        true
+    }
+
     /// See <https://clickhouse.com/docs/en/sql-reference/statements/select/order-by#order-by-expr-with-fill-modifier>
     fn supports_interpolate(&self) -> bool {
         true

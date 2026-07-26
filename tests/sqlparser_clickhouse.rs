@@ -32,6 +32,8 @@ use sqlparser::ast::Value::Boolean;
 use sqlparser::ast::*;
 use sqlparser::dialect::ClickHouseDialect;
 use sqlparser::dialect::GenericDialect;
+use sqlparser::dialect::MySqlDialect;
+use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::ParserError::ParserError;
 
 #[test]
@@ -1958,6 +1960,169 @@ fn parse_asof_left_join_rejects_match_condition() {
         clickhouse_and_generic()
             .parse_sql_statements(sql)
             .unwrap_err()
+    );
+}
+
+/// Unwraps the `WITH` list of a query, asserting it has `len` entries.
+fn with_items(query: &Query, len: usize) -> &[WithItem] {
+    let with = query.with.as_ref().expect("expected a WITH clause");
+    assert_eq!(with.cte_tables.len(), len);
+    &with.cte_tables
+}
+
+fn expect_scalar(cte_table: &WithItem) -> &ScalarWithItem {
+    match cte_table {
+        WithItem::Scalar(scalar) => scalar,
+        other => panic!("Expected: a scalar WITH item, found: {other:?}"),
+    }
+}
+
+fn expect_cte(cte_table: &WithItem) -> &Cte {
+    match cte_table {
+        WithItem::Cte(cte) => cte,
+        other => panic!("Expected: a standard CTE, found: {other:?}"),
+    }
+}
+
+// ClickHouse scalar `WITH <expression> AS <identifier>`.
+// See <https://clickhouse.com/docs/sql-reference/statements/select/with>.
+
+#[test]
+fn parse_scalar_with_subquery() {
+    let sql =
+        "WITH (SELECT max(ts) FROM raw.watermarks) AS wm SELECT * FROM raw.events WHERE ts > wm";
+    let query = clickhouse_and_generic().verified_query(sql);
+
+    let scalar = expect_scalar(&with_items(&query, 1)[0]);
+    assert_eq!(scalar.alias, Ident::new("wm"));
+    match &scalar.expr {
+        Expr::Subquery(subquery) => {
+            assert_eq!(subquery.to_string(), "SELECT max(ts) FROM raw.watermarks");
+        }
+        other => panic!("Expected: a subquery expression, found: {other:?}"),
+    }
+}
+
+#[test]
+fn parse_scalar_with_constant() {
+    let sql = "WITH 42 AS magic SELECT magic";
+    let query = clickhouse_and_generic().verified_query(sql);
+
+    let scalar = expect_scalar(&with_items(&query, 1)[0]);
+    assert_eq!(scalar.alias, Ident::new("magic"));
+    assert_eq!(scalar.expr, Expr::value(number("42")));
+}
+
+#[test]
+fn parse_scalar_with_function_call() {
+    // The original report in apache/datafusion-sqlparser-rs#1514.
+    let sql = "WITH concat(prefix_addr, '/', prefix_len) AS prefix SELECT prefix FROM tbl";
+    let query = clickhouse_and_generic().verified_query(sql);
+
+    let scalar = expect_scalar(&with_items(&query, 1)[0]);
+    assert_eq!(scalar.alias, Ident::new("prefix"));
+    assert_eq!(
+        scalar.expr.to_string(),
+        "concat(prefix_addr, '/', prefix_len)"
+    );
+}
+
+#[test]
+fn parse_scalar_with_mixed_with_standard_cte() {
+    // ClickHouse allows both flavors in the same comma-separated list, in any order.
+    let sql = "WITH 42 AS magic, sub AS (SELECT 1) SELECT magic FROM sub";
+    let query = clickhouse_and_generic().verified_query(sql);
+
+    let items = with_items(&query, 2);
+    assert_eq!(expect_scalar(&items[0]).alias, Ident::new("magic"));
+    assert_eq!(expect_cte(&items[1]).alias.name, Ident::new("sub"));
+
+    // ... and with the standard CTE first.
+    let sql = "WITH sub AS (SELECT 1) SELECT magic FROM sub";
+    let query = clickhouse_and_generic().verified_query(sql);
+    assert_eq!(
+        expect_cte(&with_items(&query, 1)[0]).alias.name,
+        Ident::new("sub")
+    );
+
+    let sql = "WITH sub AS (SELECT 1), 42 AS magic SELECT magic FROM sub";
+    let query = clickhouse_and_generic().verified_query(sql);
+    let items = with_items(&query, 2);
+    assert_eq!(expect_cte(&items[0]).alias.name, Ident::new("sub"));
+    assert_eq!(expect_scalar(&items[1]).alias, Ident::new("magic"));
+}
+
+#[test]
+fn parse_scalar_with_ambiguity() {
+    // `WITH <ident> AS (<query>)` must stay a standard CTE: the standard form is
+    // always attempted first, and it succeeds here.
+    let sql = "WITH x AS (SELECT 1) SELECT * FROM x";
+    let query = clickhouse_and_generic().verified_query(sql);
+    let cte = expect_cte(&with_items(&query, 1)[0]);
+    assert_eq!(cte.alias.name, Ident::new("x"));
+    assert_eq!(cte.query.to_string(), "SELECT 1");
+
+    // `WITH <ident> AS <ident>` has no parenthesized body, so the standard form
+    // fails and this is a scalar declaration binding the *expression* `x` to `y`.
+    let sql = "WITH x AS y SELECT y";
+    let query = clickhouse_and_generic().verified_query(sql);
+    let scalar = expect_scalar(&with_items(&query, 1)[0]);
+    assert_eq!(scalar.expr, Expr::Identifier(Ident::new("x")));
+    assert_eq!(scalar.alias, Ident::new("y"));
+
+    // A parenthesized scalar subquery is unambiguously the scalar form, because
+    // a standard CTE cannot start with `(`.
+    let sql = "WITH (SELECT 1) AS x SELECT x";
+    let query = clickhouse_and_generic().verified_query(sql);
+    let scalar = expect_scalar(&with_items(&query, 1)[0]);
+    assert_eq!(scalar.alias, Ident::new("x"));
+    assert!(matches!(scalar.expr, Expr::Subquery(_)));
+}
+
+#[test]
+fn parse_with_item_reports_the_deepest_error() {
+    // A malformed standard CTE must not be reported as a malformed scalar item:
+    // the CTE attempt consumes far more tokens, so its error is the useful one.
+    assert_eq!(
+        clickhouse_and_generic()
+            .parse_sql_statements("WITH t AS (SELECT 1 FROM) SELECT 1")
+            .unwrap_err(),
+        ParserError("Expected: identifier, found: )".to_string())
+    );
+    assert_eq!(
+        clickhouse_and_generic()
+            .parse_sql_statements("WITH a AS (SELECT 1), b AS (SELECT 2 GROUP) SELECT 1")
+            .unwrap_err(),
+        ParserError("Expected: ), found: GROUP".to_string())
+    );
+
+    // Conversely, an item that is clearly meant to be scalar keeps reporting the
+    // scalar error, since the CTE attempt gives up immediately.
+    assert_eq!(
+        clickhouse_and_generic()
+            .parse_sql_statements("WITH 42 AS 43 SELECT 1")
+            .unwrap_err(),
+        ParserError("Expected: identifier, found: 43".to_string())
+    );
+}
+
+#[test]
+fn parse_scalar_with_unsupported_by_other_dialects() {
+    let unsupported = TestedDialects::new(vec![
+        Box::new(PostgreSqlDialect {}),
+        Box::new(MySqlDialect {}),
+    ]);
+    assert_eq!(
+        unsupported
+            .parse_sql_statements("WITH 42 AS magic SELECT magic")
+            .unwrap_err(),
+        ParserError("Expected: identifier, found: 42".to_string())
+    );
+    assert_eq!(
+        unsupported
+            .parse_sql_statements("WITH (SELECT 1) AS wm SELECT wm")
+            .unwrap_err(),
+        ParserError("Expected: identifier, found: (".to_string())
     );
 }
 

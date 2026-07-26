@@ -44,10 +44,11 @@ use super::{
     OnInsert, OpenStatement, OrderBy, OrderByExpr, OrderByKind, OutputClause, Parens, Partition,
     PartitionBoundValue, PivotValueSource, ProjectionSelect, Query, RaiseStatement,
     RaiseStatementValue, ReferentialAction, RenameSelectItem, ReplaceSelectElement,
-    ReplaceSelectItem, Select, SelectInto, SelectItem, SetExpr, SqlOption, Statement, Subscript,
-    SymbolDefinition, TableAlias, TableAliasColumnDef, TableConstraint, TableFactor, TableObject,
-    TableOptionsClustered, TableWithJoins, Update, UpdateTableFromKind, Use, Values, ViewColumnDef,
-    WhileStatement, WildcardAdditionalOptions, With, WithFill,
+    ReplaceSelectItem, ScalarWithItem, Select, SelectInto, SelectItem, SetExpr, SqlOption,
+    Statement, Subscript, SymbolDefinition, TableAlias, TableAliasColumnDef, TableConstraint,
+    TableFactor, TableObject, TableOptionsClustered, TableWithJoins, Update, UpdateTableFromKind,
+    Use, Values, ViewColumnDef, WhileStatement, WildcardAdditionalOptions, With, WithFill,
+    WithItem,
 };
 
 /// Given an iterator of spans, return the [Span::union] of all spans.
@@ -191,6 +192,23 @@ impl Spanned for With {
         union_spans(
             core::iter::once(with_token.0.span).chain(cte_tables.iter().map(|item| item.span())),
         )
+    }
+}
+
+impl Spanned for WithItem {
+    fn span(&self) -> Span {
+        match self {
+            WithItem::Cte(cte) => cte.span(),
+            WithItem::Scalar(scalar) => scalar.span(),
+        }
+    }
+}
+
+impl Spanned for ScalarWithItem {
+    fn span(&self) -> Span {
+        let ScalarWithItem { expr, alias } = self;
+
+        union_spans([expr.span(), alias.span].into_iter())
     }
 }
 
@@ -2735,7 +2753,10 @@ pub mod tests {
 
         let query = test.0.parse_query().unwrap();
         let cte_span = query.clone().with.unwrap().cte_tables[0].span();
-        let cte_query_span = query.clone().with.unwrap().cte_tables[0].query.span();
+        let cte_query_span = match &query.clone().with.unwrap().cte_tables[0] {
+            WithItem::Cte(cte) => cte.query.span(),
+            other => panic!("expected a standard CTE, got {other:?}"),
+        };
         let body_span = query.body.span();
 
         // the WITH keyboard is part of the query

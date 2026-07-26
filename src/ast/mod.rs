@@ -104,15 +104,15 @@ pub use self::query::{
     MatchRecognizeSymbol, Measure, NamedWindowDefinition, NamedWindowExpr, NonBlock, Offset,
     OffsetRows, OpenJsonTableColumn, OrderBy, OrderByExpr, OrderByKind, OrderByOptions,
     OrderBySort, PipeOperator, PivotValueSource, ProjectionSelect, Query, RenameSelectItem,
-    RepetitionQuantifier, ReplaceSelectElement, ReplaceSelectItem, RowsPerMatch, Select,
-    SelectFlavor, SelectInto, SelectItem, SelectItemQualifiedWildcardKind, SelectModifiers,
+    RepetitionQuantifier, ReplaceSelectElement, ReplaceSelectItem, RowsPerMatch, ScalarWithItem,
+    Select, SelectFlavor, SelectInto, SelectItem, SelectItemQualifiedWildcardKind, SelectModifiers,
     SetExpr, SetOperator, SetQuantifier, Setting, SymbolDefinition, Table, TableAlias,
     TableAliasColumnDef, TableFactor, TableFunctionArgs, TableIndexHintForClause,
     TableIndexHintType, TableIndexHints, TableIndexType, TableSample, TableSampleBucket,
     TableSampleKind, TableSampleMethod, TableSampleModifier, TableSampleQuantity, TableSampleSeed,
     TableSampleSeedModifier, TableSampleUnit, TableVersion, TableWithJoins, Top, TopQuantity,
     UpdateTableFromKind, ValueTableMode, Values, WildcardAdditionalOptions, With, WithFill,
-    XmlNamespaceDefinition, XmlPassingArgument, XmlPassingClause, XmlTableColumn,
+    WithItem, XmlNamespaceDefinition, XmlPassingArgument, XmlPassingClause, XmlTableColumn,
     XmlTableColumnOption,
 };
 

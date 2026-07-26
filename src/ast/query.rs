@@ -754,8 +754,10 @@ pub struct With {
     pub with_token: AttachedToken,
     /// Whether the `WITH` is recursive (`WITH RECURSIVE`).
     pub recursive: bool,
-    /// The list of CTEs declared by this `WITH` clause.
-    pub cte_tables: Vec<Cte>,
+    /// The list of items declared by this `WITH` clause. Each item is either a
+    /// standard common table expression or -- for dialects that support it --
+    /// a scalar expression bound to a name.
+    pub cte_tables: Vec<WithItem>,
 }
 
 impl fmt::Display for With {
@@ -791,6 +793,65 @@ impl fmt::Display for CteAsMaterialized {
             }
         };
         Ok(())
+    }
+}
+
+/// A single entry in a `WITH` clause.
+///
+/// Most dialects only allow the standard [`Cte`] form, `<alias> AS (<query>)`.
+/// ClickHouse additionally allows a *scalar* form in which the expression comes
+/// first and the name second (see [`ScalarWithItem`]), and permits both forms to be
+/// mixed freely in the same comma-separated list:
+///
+/// ```sql
+/// WITH 42 AS magic, sub AS (SELECT 1) SELECT magic FROM sub
+/// ```
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "visitor", derive(Visit, VisitMut))]
+pub enum WithItem {
+    /// A standard common table expression: `<alias> [(col, ...)] AS (<query>)`.
+    Cte(Cte),
+    /// A ClickHouse scalar common expression: `<expr> AS <identifier>`.
+    Scalar(ScalarWithItem),
+}
+
+impl fmt::Display for WithItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            WithItem::Cte(cte) => cte.fmt(f),
+            WithItem::Scalar(scalar) => scalar.fmt(f),
+        }
+    }
+}
+
+/// A ClickHouse scalar common expression declared in a `WITH` clause:
+/// `<expression> AS <identifier>`.
+///
+/// Note that the operand order is the mirror image of the standard [`Cte`]
+/// form: the expression is written *before* the name.
+///
+/// ```sql
+/// WITH (SELECT max(ts) FROM watermarks) AS wm SELECT * FROM events WHERE ts > wm
+/// WITH 42 AS magic SELECT magic
+/// ```
+///
+/// [ClickHouse docs](https://clickhouse.com/docs/sql-reference/statements/select/with)
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "visitor", derive(Visit, VisitMut))]
+pub struct ScalarWithItem {
+    /// The expression bound by this declaration. Declared before `alias` so
+    /// that derived visitors walk the expression before the name it binds,
+    /// matching both the written order and the scoping order.
+    pub expr: Expr,
+    /// The name the expression is bound to (written after `AS`).
+    pub alias: Ident,
+}
+
+impl fmt::Display for ScalarWithItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} AS {}", self.expr, self.alias)
     }
 }
 

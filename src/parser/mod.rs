@@ -14444,7 +14444,7 @@ impl<'a> Parser<'a> {
             Some(With {
                 with_token: with_token.clone().into(),
                 recursive: self.parse_keyword(Keyword::RECURSIVE),
-                cte_tables: self.parse_comma_separated(Parser::parse_cte)?,
+                cte_tables: self.parse_comma_separated(Parser::parse_with_item)?,
             })
         } else {
             None
@@ -14909,6 +14909,60 @@ impl<'a> Parser<'a> {
             include_null_values,
             without_array_wrapper,
         })
+    }
+
+    /// Parse a single entry of a `WITH` clause.
+    ///
+    /// This is either a standard CTE (`alias [( col1, ... )] [AS] (subquery)`)
+    /// or, for dialects with [`Dialect::supports_scalar_with`], a ClickHouse
+    /// scalar declaration (`<expr> AS <identifier>`).
+    ///
+    /// The standard form is always attempted first, so `WITH x AS (SELECT 1)`
+    /// keeps parsing as a CTE rather than as the scalar expression `x`. The
+    /// scalar form is only reached once the standard form has definitively
+    /// failed, which is what makes `WITH x AS y` resolve to a scalar.
+    ///
+    /// The two forms cannot be told apart by a bounded lookahead -- both
+    /// `toDate(now()) AS d` and `t (a, b) AS (SELECT ...)` open with a word
+    /// followed by `(` -- so when *both* attempts fail the error from the one
+    /// that consumed the most tokens is reported. Otherwise a typo deep inside a
+    /// CTE subquery would surface as a shallow complaint about the scalar form.
+    pub fn parse_with_item(&mut self) -> Result<WithItem, ParserError> {
+        if !self.dialect.supports_scalar_with() {
+            return self.parse_cte().map(WithItem::Cte);
+        }
+
+        let start_index = self.index;
+        let (cte_error, cte_index) = match self.parse_cte() {
+            Ok(cte) => return Ok(WithItem::Cte(cte)),
+            Err(e @ ParserError::RecursionLimitExceeded) => return Err(e),
+            Err(e) => {
+                let cte_index = self.index;
+                self.index = start_index;
+                (e, cte_index)
+            }
+        };
+
+        match self.parse_scalar_with_item() {
+            Ok(scalar) => Ok(WithItem::Scalar(scalar)),
+            Err(scalar_error) => {
+                if cte_index > self.index {
+                    Err(cte_error)
+                } else {
+                    Err(scalar_error)
+                }
+            }
+        }
+    }
+
+    /// Parse a ClickHouse scalar `WITH` declaration: `<expression> AS <identifier>`.
+    ///
+    /// See <https://clickhouse.com/docs/sql-reference/statements/select/with>
+    pub fn parse_scalar_with_item(&mut self) -> Result<ScalarWithItem, ParserError> {
+        let expr = self.parse_expr()?;
+        self.expect_keyword_is(Keyword::AS)?;
+        let alias = self.parse_identifier()?;
+        Ok(ScalarWithItem { expr, alias })
     }
 
     /// Parse a CTE (`alias [( col1, col2, ... )] [AS] (subquery)`)
