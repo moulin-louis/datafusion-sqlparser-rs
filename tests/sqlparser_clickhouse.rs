@@ -2369,6 +2369,58 @@ fn parse_view_table_function() {
         .is_err());
 }
 
+#[test]
+fn parse_select_wildcard_apply() {
+    // `APPLY` calls a function on every column the wildcard expands to.
+    for sql in [
+        "SELECT * APPLY(sum) FROM t",
+        "SELECT * APPLY(quantile(0.5)) FROM t",
+        "SELECT t.* APPLY(sum) FROM t",
+        // Transformers chain, applied left to right.
+        "SELECT * APPLY(sum) APPLY(toString) FROM t",
+        "SELECT * EXCEPT (b) APPLY(sum) FROM t",
+    ] {
+        clickhouse_and_generic().verified_stmt(sql);
+    }
+
+    // ClickHouse accepts the transformer without parentheses, and this keeps
+    // whichever spelling was written.
+    clickhouse_and_generic().verified_stmt("SELECT * APPLY sum FROM t");
+
+    // A lambda is a transformer too. Checked on ClickHouse only: GenericDialect
+    // has no lambdas and reads `x -> x + 1` as a `->` binary operator.
+    clickhouse().verified_stmt("SELECT * APPLY(x -> x + 1) FROM t");
+
+    let applies = |sql: &str| match clickhouse_and_generic()
+        .verified_only_select(sql)
+        .projection
+        .first()
+        .cloned()
+    {
+        Some(SelectItem::Wildcard(options)) => options.opt_apply,
+        other => panic!("expected a wildcard, got {other:?}"),
+    };
+
+    let apply = applies("SELECT * APPLY(sum) FROM t");
+    assert_eq!(apply.len(), 1);
+    assert_eq!(apply[0].expr.to_string(), "sum");
+    assert!(apply[0].parenthesized);
+
+    let apply = applies("SELECT * APPLY sum FROM t");
+    assert!(!apply[0].parenthesized);
+
+    let apply = applies("SELECT * APPLY(sum) APPLY(toString) FROM t");
+    assert_eq!(
+        apply.iter().map(|a| a.expr.to_string()).collect::<Vec<_>>(),
+        ["sum", "toString"]
+    );
+
+    // A dialect without the feature leaves `APPLY` alone.
+    assert!(TestedDialects::new(vec![Box::new(PostgreSqlDialect {})])
+        .parse_sql_statements("SELECT * APPLY(sum) FROM t")
+        .is_err());
+}
+
 fn clickhouse() -> TestedDialects {
     TestedDialects::new(vec![Box::new(ClickHouseDialect {})])
 }

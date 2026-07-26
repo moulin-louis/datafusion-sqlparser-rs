@@ -1006,6 +1006,9 @@ pub struct WildcardAdditionalOptions {
     /// `[AS <alias>]`.
     ///  Redshift syntax: <https://docs.aws.amazon.com/redshift/latest/dg/r_SELECT_list.html>
     pub opt_alias: Option<Ident>,
+    /// `[APPLY ...]`, applied left to right. This list can be empty.
+    ///  Clickhouse syntax: <https://clickhouse.com/docs/sql-reference/statements/select#apply>
+    pub opt_apply: Vec<ApplySelectItem>,
 }
 
 impl Default for WildcardAdditionalOptions {
@@ -1018,6 +1021,7 @@ impl Default for WildcardAdditionalOptions {
             opt_replace: None,
             opt_rename: None,
             opt_alias: None,
+            opt_apply: vec![],
         }
     }
 }
@@ -1042,7 +1046,39 @@ impl fmt::Display for WildcardAdditionalOptions {
         if let Some(alias) = &self.opt_alias {
             write!(f, " AS {alias}")?;
         }
+        for apply in &self.opt_apply {
+            write!(f, " {apply}")?;
+        }
         Ok(())
+    }
+}
+
+/// ClickHouse `APPLY` transformer, calling a function on every column the
+/// wildcard expands to.
+///
+/// # Syntax
+/// ```plaintext
+/// APPLY( <function> )
+/// APPLY <function>
+/// ```
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "visitor", derive(Visit, VisitMut))]
+pub struct ApplySelectItem {
+    /// What to apply: a function name, a call carrying parameters such as
+    /// `quantile(0.5)`, or a lambda.
+    pub expr: Expr,
+    /// Whether the source parenthesized the transformer. ClickHouse accepts
+    /// `APPLY(sum)` and `APPLY sum` alike, and this preserves which was written.
+    pub parenthesized: bool,
+}
+
+impl fmt::Display for ApplySelectItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.parenthesized {
+            true => write!(f, "APPLY({})", self.expr),
+            false => write!(f, "APPLY {}", self.expr),
+        }
     }
 }
 

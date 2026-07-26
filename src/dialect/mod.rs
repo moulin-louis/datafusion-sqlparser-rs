@@ -366,6 +366,14 @@ pub trait Dialect: Debug + Any {
         false
     }
 
+    /// Returns true if the dialect supports ClickHouse's `APPLY` column
+    /// transformer on a wildcard: `SELECT * APPLY(sum) FROM tbl`.
+    ///
+    /// <https://clickhouse.com/docs/sql-reference/statements/select#apply>
+    fn supports_select_wildcard_apply(&self) -> bool {
+        false
+    }
+
     /// Returns true if a table function may take a bare subquery as its only
     /// argument, as ClickHouse's `view(SELECT ...)` does.
     ///

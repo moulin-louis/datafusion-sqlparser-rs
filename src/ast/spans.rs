@@ -1903,6 +1903,7 @@ impl Spanned for WildcardAdditionalOptions {
             opt_replace,
             opt_rename,
             opt_alias,
+            opt_apply,
         } = self;
 
         union_spans(
@@ -1912,7 +1913,8 @@ impl Spanned for WildcardAdditionalOptions {
                 .chain(opt_rename.as_ref().map(|i| i.span()))
                 .chain(opt_replace.as_ref().map(|i| i.span()))
                 .chain(opt_except.as_ref().map(|i| i.span()))
-                .chain(opt_alias.as_ref().map(|i| i.span)),
+                .chain(opt_alias.as_ref().map(|i| i.span))
+                .chain(opt_apply.iter().map(|i| i.expr.span())),
         )
     }
 }

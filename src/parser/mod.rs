@@ -19271,6 +19271,12 @@ impl<'a> Parser<'a> {
             None
         };
 
+        let opt_apply = if self.dialect.supports_select_wildcard_apply() {
+            self.parse_select_item_applies()?
+        } else {
+            vec![]
+        };
+
         Ok(WildcardAdditionalOptions {
             wildcard_token: wildcard_token.into(),
             opt_ilike,
@@ -19279,6 +19285,7 @@ impl<'a> Parser<'a> {
             opt_rename,
             opt_replace,
             opt_alias,
+            opt_apply,
         })
     }
 
@@ -19322,6 +19329,30 @@ impl<'a> Parser<'a> {
         };
 
         Ok(opt_exclude)
+    }
+
+    /// Parse the [`APPLY`](ApplySelectItem) transformers of a wildcard select
+    /// item. They chain, so `* APPLY(sum) APPLY(toString)` sums each column and
+    /// then stringifies each sum.
+    ///
+    /// Returns an empty list when there are none.
+    fn parse_select_item_applies(&mut self) -> Result<Vec<ApplySelectItem>, ParserError> {
+        let mut applies = vec![];
+        while self.parse_keyword(Keyword::APPLY) {
+            // `APPLY(sum)` and `APPLY sum` mean the same thing. The parentheses
+            // are ambiguous with a call taking no arguments, so they are only
+            // consumed as a wrapper when what follows is not itself a call.
+            let parenthesized = self.consume_token(&Token::LParen);
+            let expr = self.parse_expr()?;
+            if parenthesized {
+                self.expect_token(&Token::RParen)?;
+            }
+            applies.push(ApplySelectItem {
+                expr,
+                parenthesized,
+            });
+        }
+        Ok(applies)
     }
 
     /// Parse an [`Except`](ExceptSelectItem) information for wildcard select items.
