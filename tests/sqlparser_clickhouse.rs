@@ -2616,6 +2616,66 @@ fn parse_join_strictness() {
     assert_eq!(select.from[0].joins[0].strictness, None);
 }
 
+#[test]
+fn parse_ternary_operator() {
+    // `<condition> ? <then> : <else>`, ClickHouse's spelling of `if(...)`.
+    // Groupings below were read off `EXPLAIN SYNTAX` on ClickHouse 26.7.1.
+    for sql in [
+        "SELECT a ? b : c",
+        "SELECT a ? b : c FROM t",
+        "SELECT 1 = 1 ? 2 : 3",
+        "SELECT 1 ? (2) : (3 ? 4 : 5)",
+        "SELECT * FROM t WHERE flag ? x : y",
+    ] {
+        clickhouse().verified_stmt(sql);
+    }
+
+    let ternary = |sql: &str| match clickhouse().verified_expr(sql) {
+        Expr::Ternary {
+            condition,
+            then_branch,
+            else_branch,
+        } => (*condition, *then_branch, *else_branch),
+        other => panic!("expected a ternary, got {other:?}"),
+    };
+
+    // The condition binds looser than every binary operator: ClickHouse reads
+    // `1 OR 0 ? 2 : 3` as `if(or(1, 0), 2, 3)`, not `1 OR if(0, 2, 3)`.
+    let (condition, _, _) = ternary("1 OR 0 ? 2 : 3");
+    assert_eq!(condition.to_string(), "1 OR 0");
+    let (condition, _, _) = ternary("0 AND 1 ? 2 : 3");
+    assert_eq!(condition.to_string(), "0 AND 1");
+    let (condition, _, _) = ternary("1 = 1 ? 2 : 3");
+    assert_eq!(condition.to_string(), "1 = 1");
+
+    // Both branches take a full expression.
+    let (_, then_branch, else_branch) = ternary("1 ? 2 AND 3 : 4 + 10");
+    assert_eq!(then_branch.to_string(), "2 AND 3");
+    assert_eq!(else_branch.to_string(), "4 + 10");
+
+    // `:` ends the `then` branch rather than starting a member access.
+    let (_, then_branch, _) = ternary("1 ? 2 = 2 : 4");
+    assert_eq!(then_branch.to_string(), "2 = 2");
+
+    // ClickHouse rejects an unparenthesized ternary inside another one; this
+    // accepts it, grouping as C does. Parsing more than the server accepts is
+    // harmless, and the alternative -- tracking parenthesis depth to allow
+    // `1 ? (2) : (3 ? 4 : 5)` while rejecting this -- buys nothing.
+    let (_, then_branch, else_branch) = ternary("1 ? 2 ? 3 : 4 : 5");
+    assert_eq!(then_branch.to_string(), "2 ? 3 : 4");
+    assert_eq!(else_branch.to_string(), "5");
+    let (_, _, else_branch) = ternary("1 ? 2 : 3 ? 4 : 5");
+    assert_eq!(else_branch.to_string(), "3 ? 4 : 5");
+
+    // `?` is the operator here, never a bind parameter -- ClickHouse rejects
+    // `= ?` too. Dialects without the feature keep their placeholder.
+    assert!(clickhouse()
+        .parse_sql_statements("SELECT * FROM t WHERE id = ?")
+        .is_err());
+    let generic = TestedDialects::new(vec![Box::new(GenericDialect {})]);
+    generic.verified_stmt("SELECT * FROM t WHERE id = ?");
+}
+
 fn clickhouse() -> TestedDialects {
     TestedDialects::new(vec![Box::new(ClickHouseDialect {})])
 }

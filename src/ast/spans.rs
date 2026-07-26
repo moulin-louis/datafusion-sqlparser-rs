@@ -1553,6 +1553,15 @@ impl Spanned for Expr {
                 high,
             } => expr.span().union(&low.span()).union(&high.span()),
 
+            Expr::Ternary {
+                condition,
+                then_branch,
+                else_branch,
+            } => condition
+                .span()
+                .union(&then_branch.span())
+                .union(&else_branch.span()),
+
             Expr::BinaryOp { left, op: _, right } => left.span().union(&right.span()),
             Expr::Like {
                 negated: _,

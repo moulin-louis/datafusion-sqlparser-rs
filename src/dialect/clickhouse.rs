@@ -108,6 +108,10 @@ impl Dialect for ClickHouseDialect {
         true
     }
 
+    fn supports_ternary_operator(&self) -> bool {
+        true
+    }
+
     fn is_table_alias(&self, kw: &Keyword, _parser: &mut Parser) -> bool {
         // None of these can be an implicit alias, or the modifier they
         // introduce would be swallowed by the preceding table: `FROM tbl FINAL`

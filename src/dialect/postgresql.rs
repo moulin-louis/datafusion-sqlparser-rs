@@ -57,6 +57,7 @@ const IS_PREC: u8 = 40;
 const NOT_PREC: u8 = 30;
 const AND_PREC: u8 = 20;
 const OR_PREC: u8 = 10;
+const TERNARY_PREC: u8 = 5;
 
 impl Dialect for PostgreSqlDialect {
     fn identifier_quote_style(&self, _identifier: &str) -> Option<char> {
@@ -185,6 +186,9 @@ impl Dialect for PostgreSqlDialect {
             Precedence::UnaryNot => NOT_PREC,
             Precedence::And => AND_PREC,
             Precedence::Or => OR_PREC,
+            // PostgreSQL has no ternary conditional; `?` is the JSON existence
+            // operator. Kept below `OR` for consistency with the default.
+            Precedence::Ternary => TERNARY_PREC,
         }
     }
 

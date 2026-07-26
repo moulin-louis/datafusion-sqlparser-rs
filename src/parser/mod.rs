@@ -373,6 +373,10 @@ pub struct Parser<'a> {
     /// `parse_table_factor`. See [`Parser::parse_table_factor`] for the 2^N
     /// pattern this guards.
     failed_derived_table_factor_positions: BTreeSet<usize>,
+    /// How many ternary conditionals are having their `then` branch parsed.
+    /// While this is non-zero, `:` ends that branch instead of acting as the
+    /// semi-structured access operator. See [`Parser::parse_ternary`].
+    ternary_then_depth: usize,
 }
 
 /// Copy marker for a [`ParserError`] cached by the `parse_prefix` failure
@@ -419,6 +423,7 @@ impl<'a> Parser<'a> {
             failed_prefix_positions: BTreeMap::new(),
             failed_reserved_word_prefix_positions: BTreeMap::new(),
             failed_derived_table_factor_positions: BTreeSet::new(),
+            ternary_then_depth: 0,
         }
     }
 
@@ -3832,6 +3837,30 @@ impl<'a> Parser<'a> {
         Ok(trailing_bracket)
     }
 
+    /// Parse the rest of a ternary conditional, `condition` already in hand:
+    /// `<condition> ? <then> : <else>`.
+    ///
+    /// Both branches take a full expression -- ClickHouse reads
+    /// `x ? a = b : c + 1` as `if(x, a = b, c + 1)` -- so the `then` branch is
+    /// parsed at the lowest precedence with `:` suppressed as an operator.
+    fn parse_ternary(&mut self, condition: Expr) -> Result<Expr, ParserError> {
+        self.expect_token(&Token::Question)?;
+
+        self.ternary_then_depth += 1;
+        let then_branch = self.parse_expr();
+        self.ternary_then_depth -= 1;
+        let then_branch = then_branch?;
+
+        self.expect_token(&Token::Colon)?;
+        let else_branch = self.parse_expr()?;
+
+        Ok(Expr::Ternary {
+            condition: Box::new(condition),
+            then_branch: Box::new(then_branch),
+            else_branch: Box::new(else_branch),
+        })
+    }
+
     /// Parse an operator following an expression
     pub fn parse_infix(&mut self, expr: Expr, precedence: u8) -> Result<Expr, ParserError> {
         // allow the dialect to override infix parsing
@@ -3840,6 +3869,10 @@ impl<'a> Parser<'a> {
         }
 
         let dialect = self.dialect;
+
+        if dialect.supports_ternary_operator() && self.peek_token_ref().token == Token::Question {
+            return self.parse_ternary(expr);
+        }
 
         self.advance_token();
         let tok = self.get_current_token();
@@ -4468,6 +4501,11 @@ impl<'a> Parser<'a> {
 
     /// Get the precedence of the next token
     pub fn get_next_precedence(&self) -> Result<u8, ParserError> {
+        // The `then` branch of a ternary is terminated by `:`, which would
+        // otherwise be read as the start of a semi-structured access.
+        if self.ternary_then_depth > 0 && self.peek_token_ref().token == Token::Colon {
+            return Ok(self.dialect.prec_unknown());
+        }
         self.dialect.get_next_precedence_default(self)
     }
 

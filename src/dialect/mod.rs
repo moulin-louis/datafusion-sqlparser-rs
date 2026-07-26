@@ -366,6 +366,22 @@ pub trait Dialect: Debug + Any {
         false
     }
 
+    /// Returns true if the dialect supports the C-style ternary conditional
+    /// `<condition> ? <then> : <else>`, ClickHouse's spelling of `if(...)`.
+    ///
+    /// `?` cannot mean two things at once, so a dialect enabling this gives up
+    /// reading `?` as a bind parameter or as the PostgreSQL JSON existence
+    /// operator. That is why [`GenericDialect`] does not enable it, unlike most
+    /// ClickHouse features: `SELECT * FROM t WHERE id = ?` has to keep working
+    /// there.
+    ///
+    /// [`GenericDialect`]: crate::dialect::GenericDialect
+    ///
+    /// <https://clickhouse.com/docs/sql-reference/operators#conditional-expression>
+    fn supports_ternary_operator(&self) -> bool {
+        false
+    }
+
     /// Returns true if the dialect supports ClickHouse's `ANY`/`ALL` join
     /// strictness, written on either side of the join kind: `ANY LEFT JOIN`,
     /// `LEFT ANY JOIN`.
@@ -996,6 +1012,9 @@ pub trait Dialect: Debug + Any {
                 // string columns. See `JsonAccess`.
                 _ => Ok(p!(Colon)),
             },
+            // The ternary condition binds looser than every binary operator,
+            // so `a OR b ? x : y` tests `a OR b`.
+            Token::Question if self.supports_ternary_operator() => Ok(p!(Ternary)),
             Token::Arrow
             | Token::LongArrow
             | Token::HashArrow
@@ -1058,6 +1077,7 @@ pub trait Dialect: Debug + Any {
             Precedence::UnaryNot => 15,
             Precedence::And => 10,
             Precedence::Or => 5,
+            Precedence::Ternary => 3,
         }
     }
 
@@ -1953,8 +1973,11 @@ pub enum Precedence {
     UnaryNot,
     /// Logical `AND`.
     And,
-    /// Logical `OR` (lowest precedence).
+    /// Logical `OR`.
     Or,
+    /// ClickHouse ternary conditional `? :` (lowest precedence), so that the
+    /// condition of `a OR b ? x : y` is the whole `a OR b`.
+    Ternary,
 }
 
 impl dyn Dialect {

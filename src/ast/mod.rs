@@ -1005,6 +1005,18 @@ pub enum Expr {
         /// `true` when the `NOT` modifier is present.
         negated: bool,
     },
+    /// ClickHouse ternary conditional: `<condition> ? <then> : <else>`,
+    /// a synonym for `if(<condition>, <then>, <else>)`.
+    ///
+    /// See <https://clickhouse.com/docs/sql-reference/operators#conditional-expression>
+    Ternary {
+        /// The condition being tested.
+        condition: Box<Expr>,
+        /// Result when the condition holds.
+        then_branch: Box<Expr>,
+        /// Result otherwise.
+        else_branch: Box<Expr>,
+    },
     /// `<expr> [ NOT ] BETWEEN <low> AND <high>`
     Between {
         /// Expression being compared.
@@ -1815,6 +1827,11 @@ impl fmt::Display for Expr {
                 if *negated { "NOT " } else { "" },
                 table
             ),
+            Expr::Ternary {
+                condition,
+                then_branch,
+                else_branch,
+            } => write!(f, "{condition} ? {then_branch} : {else_branch}"),
             Expr::Between {
                 expr,
                 negated,
