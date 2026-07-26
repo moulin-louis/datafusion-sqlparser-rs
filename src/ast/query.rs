@@ -1484,6 +1484,13 @@ pub struct TableFunctionArgs {
     /// `SELECT * FROM executable('generate_random.py', TabSeparated, 'id UInt32, random String', SETTINGS send_chunk_header = false, pool_size = 16)`
     /// [`executable` table function](https://clickhouse.com/docs/en/engines/table-functions/executable)
     pub settings: Option<Vec<Setting>>,
+    /// A lone subquery argument, written without parentheses of its own, as
+    /// ClickHouse's `view(SELECT ...)`. Mutually exclusive with `args`:
+    /// ClickHouse rejects `view((SELECT ...))`, so the parentheses cannot be
+    /// added back when rendering.
+    ///
+    /// [`view` table function](https://clickhouse.com/docs/sql-reference/table-functions/view)
+    pub subquery: Option<Box<Query>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
@@ -2343,6 +2350,9 @@ impl fmt::Display for TableFactor {
                 }
                 if let Some(args) = args {
                     write!(f, "(")?;
+                    if let Some(subquery) = &args.subquery {
+                        write!(f, "{subquery}")?;
+                    }
                     write!(f, "{}", display_comma_separated(&args.args))?;
                     if let Some(ref settings) = args.settings {
                         if !args.args.is_empty() {

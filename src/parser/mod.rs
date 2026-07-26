@@ -18984,6 +18984,26 @@ impl<'a> Parser<'a> {
             return Ok(TableFunctionArgs {
                 args: vec![],
                 settings: None,
+                subquery: None,
+            });
+        }
+        // `view(SELECT ...)` takes a query where an expression would go, and
+        // rejects the same query in parentheses.
+        if self.dialect.supports_table_function_subquery()
+            && matches!(
+                self.peek_token_ref().token,
+                Token::Word(Word {
+                    keyword: Keyword::SELECT | Keyword::WITH,
+                    ..
+                })
+            )
+        {
+            let subquery = self.parse_query()?;
+            self.expect_token(&Token::RParen)?;
+            return Ok(TableFunctionArgs {
+                args: vec![],
+                settings: None,
+                subquery: Some(subquery),
             });
         }
         let mut args = vec![];
@@ -18997,7 +19017,11 @@ impl<'a> Parser<'a> {
             }
         };
         self.expect_token(&Token::RParen)?;
-        Ok(TableFunctionArgs { args, settings })
+        Ok(TableFunctionArgs {
+            args,
+            settings,
+            subquery: None,
+        })
     }
 
     /// Parses a potentially empty list of arguments to a function

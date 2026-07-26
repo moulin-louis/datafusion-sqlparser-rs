@@ -1690,6 +1690,7 @@ fn parse_select_table_function_settings() {
                     value: Expr::value(single_quoted_string("s")),
                 },
             ]),
+            subquery: None,
         },
     );
     check_settings(
@@ -1699,6 +1700,7 @@ fn parse_select_table_function_settings() {
                 Expr::Identifier("arg".into()),
             ))],
             settings: None,
+            subquery: None,
         },
     );
     check_settings(
@@ -1715,6 +1717,7 @@ fn parse_select_table_function_settings() {
                     value: Expr::value(single_quoted_string("s")),
                 },
             ]),
+            subquery: None,
         },
     );
     let invalid_cases = vec![
@@ -2308,6 +2311,61 @@ fn parse_positional_tuple_access() {
         .is_err());
     assert!(TestedDialects::new(vec![Box::new(MySqlDialect {})])
         .parse_sql_statements("SELECT t.2 FROM t")
+        .is_err());
+}
+
+#[test]
+fn parse_view_table_function() {
+    // `view(SELECT ...)` turns a query into a table. The subquery carries no
+    // parentheses of its own -- ClickHouse rejects `view((SELECT 1))`.
+    for sql in [
+        "SELECT * FROM view(SELECT 1 AS x)",
+        "SELECT * FROM view(SELECT a FROM t WHERE b > 1)",
+        "SELECT * FROM view(WITH c AS (SELECT 1) SELECT * FROM c)",
+        "SELECT * FROM view(SELECT a FROM t) AS v",
+    ] {
+        clickhouse_and_generic().verified_stmt(sql);
+    }
+
+    let select =
+        clickhouse_and_generic().verified_only_select("SELECT * FROM view(SELECT a FROM t)");
+    match &select.from[0].relation {
+        TableFactor::Table {
+            name,
+            args: Some(args),
+            ..
+        } => {
+            assert_eq!(name.to_string(), "view");
+            assert!(args.args.is_empty());
+            assert_eq!(
+                args.subquery.as_ref().map(|q| q.to_string()),
+                Some("SELECT a FROM t".to_string())
+            );
+        }
+        other => panic!("expected a table function, got {other:?}"),
+    }
+
+    // The tables the subquery reads are reachable, which is the point: a
+    // visitor collecting relations sees `t`.
+    #[cfg(feature = "visitor")]
+    {
+        use sqlparser::ast::{visit_relations, Statement};
+        use std::ops::ControlFlow;
+
+        let statements: Vec<Statement> = clickhouse()
+            .parse_sql_statements("SELECT * FROM view(SELECT a FROM t)")
+            .unwrap();
+        let mut relations = vec![];
+        let _ = visit_relations(&statements, |name| {
+            relations.push(name.to_string());
+            ControlFlow::<()>::Continue(())
+        });
+        assert!(relations.iter().any(|r| r == "t"), "got {relations:?}");
+    }
+
+    // A dialect without the feature keeps rejecting a query in that position.
+    assert!(TestedDialects::new(vec![Box::new(PostgreSqlDialect {})])
+        .parse_sql_statements("SELECT * FROM view(SELECT 1)")
         .is_err());
 }
 

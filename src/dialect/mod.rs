@@ -366,6 +366,14 @@ pub trait Dialect: Debug + Any {
         false
     }
 
+    /// Returns true if a table function may take a bare subquery as its only
+    /// argument, as ClickHouse's `view(SELECT ...)` does.
+    ///
+    /// <https://clickhouse.com/docs/sql-reference/table-functions/view>
+    fn supports_table_function_subquery(&self) -> bool {
+        false
+    }
+
     /// Returns true if the dialect supports ClickHouse-style `ASOF JOIN` / `ASOF LEFT JOIN`,
     /// where the closest-match condition is written as part of the `ON`/`USING` constraint
     /// rather than in Snowflake's dedicated `MATCH_CONDITION (...)` clause.

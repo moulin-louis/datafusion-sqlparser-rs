@@ -57,6 +57,10 @@ impl Dialect for GenericDialect {
         true
     }
 
+    fn supports_table_function_subquery(&self) -> bool {
+        true
+    }
+
     fn supports_numeric_field_access(&self) -> bool {
         true
     }
