@@ -95,7 +95,7 @@ pub use self::dml::{
 };
 pub use self::operator::{BinaryOperator, UnaryOperator};
 pub use self::query::{
-    AfterMatchSkip, ConnectByKind, Cte, CteAsMaterialized, Distinct, EmptyMatchesMode,
+    AfterMatchSkip, ConnectByKind, Cte, CteAsMaterialized, CteTable, Distinct, EmptyMatchesMode,
     ExceptSelectItem, ExcludeSelectItem, ExprWithAlias, ExprWithAliasAndOrderBy, Fetch, ForClause,
     ForJson, ForXml, FormatClause, GroupByExpr, GroupByWithModifier, IdentWithAlias,
     IlikeSelectItem, InputFormatClause, Interpolate, InterpolateExpr, Join, JoinConstraint,
@@ -104,7 +104,7 @@ pub use self::query::{
     MatchRecognizeSymbol, Measure, NamedWindowDefinition, NamedWindowExpr, NonBlock, Offset,
     OffsetRows, OpenJsonTableColumn, OrderBy, OrderByExpr, OrderByKind, OrderByOptions,
     OrderBySort, PipeOperator, PivotValueSource, ProjectionSelect, Query, RenameSelectItem,
-    RepetitionQuantifier, ReplaceSelectElement, ReplaceSelectItem, RowsPerMatch, Select,
+    RepetitionQuantifier, ReplaceSelectElement, ReplaceSelectItem, RowsPerMatch, ScalarCte, Select,
     SelectFlavor, SelectInto, SelectItem, SelectItemQualifiedWildcardKind, SelectModifiers,
     SetExpr, SetOperator, SetQuantifier, Setting, SymbolDefinition, Table, TableAlias,
     TableAliasColumnDef, TableFactor, TableFunctionArgs, TableIndexHintForClause,

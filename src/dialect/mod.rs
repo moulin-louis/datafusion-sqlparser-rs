@@ -1809,6 +1809,22 @@ pub trait Dialect: Debug + Any {
         false
     }
 
+    /// Returns true if the dialect supports declaring a scalar expression in a
+    /// `WITH` clause, where the expression is written *before* the name it is
+    /// bound to. For example:
+    /// ```sql
+    /// WITH 42 AS magic SELECT magic
+    /// WITH (SELECT max(ts) FROM watermarks) AS wm SELECT * FROM events WHERE ts > wm
+    /// ```
+    ///
+    /// Such declarations may be freely mixed with standard CTEs in the same
+    /// `WITH` list.
+    ///
+    /// [ClickHouse](https://clickhouse.com/docs/sql-reference/statements/select/with)
+    fn supports_scalar_with(&self) -> bool {
+        false
+    }
+
     /// Returns true if the dialect supports parenthesized multi-column
     /// aliases in SELECT items. For example:
     /// ```sql
