@@ -4397,10 +4397,27 @@ impl<'a> Parser<'a> {
         if self.dialect.supports_in_unparenthesized_expr()
             && self.peek_token_ref().token != Token::LParen
         {
-            return Ok(Expr::InList {
-                expr: Box::new(expr),
-                list: vec![self.parse_expr()?],
-                negated,
+            // ClickHouse: a bare name on the right-hand side is a *table*, and
+            // reads all of it (`UserID IN users` == `UserID IN (SELECT * FROM
+            // users)`). Anything else -- a literal, a query parameter -- is an
+            // ordinary single-element list.
+            let rhs = self.parse_expr()?;
+            return Ok(match rhs {
+                Expr::Identifier(ident) => Expr::InTable {
+                    expr: Box::new(expr),
+                    table: ObjectName::from(vec![ident]),
+                    negated,
+                },
+                Expr::CompoundIdentifier(idents) => Expr::InTable {
+                    expr: Box::new(expr),
+                    table: ObjectName::from(idents),
+                    negated,
+                },
+                rhs => Expr::InList {
+                    expr: Box::new(expr),
+                    list: vec![rhs],
+                    negated,
+                },
             });
         }
         self.expect_token(&Token::LParen)?;

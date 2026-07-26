@@ -1533,6 +1533,11 @@ impl Spanned for Expr {
                 array_expr,
                 negated: _,
             } => expr.span().union(&array_expr.span()),
+            Expr::InTable {
+                expr,
+                table,
+                negated: _,
+            } => expr.span().union(&table.span()),
             Expr::Between {
                 expr,
                 negated: _,

@@ -984,6 +984,26 @@ pub enum Expr {
         /// `true` when the `NOT` modifier is present.
         negated: bool,
     },
+    /// `<expr> [ NOT ] IN <table name>`
+    ///
+    /// ClickHouse allows a bare table name on the right-hand side of `IN`, which
+    /// reads the whole table: `UserID IN users` is equivalent to
+    /// `UserID IN (SELECT * FROM users)`.
+    ///
+    /// This is a distinct variant rather than an [`Expr::InList`] holding an
+    /// identifier because the right-hand side names a *relation*, and consumers
+    /// that walk relations (such as [`crate::ast::visit_relations`]) must see it.
+    ///
+    /// <https://clickhouse.com/docs/sql-reference/operators/in>
+    InTable {
+        /// Left-hand expression to test for membership.
+        expr: Box<Expr>,
+        /// The table supplying the candidate values.
+        #[cfg_attr(feature = "visitor", visit(with = "visit_relation"))]
+        table: ObjectName,
+        /// `true` when the `NOT` modifier is present.
+        negated: bool,
+    },
     /// `<expr> [ NOT ] BETWEEN <low> AND <high>`
     Between {
         /// Expression being compared.
@@ -1782,6 +1802,17 @@ impl fmt::Display for Expr {
                 expr,
                 if *negated { "NOT " } else { "" },
                 array_expr
+            ),
+            Expr::InTable {
+                expr,
+                table,
+                negated,
+            } => write!(
+                f,
+                "{} {}IN {}",
+                expr,
+                if *negated { "NOT " } else { "" },
+                table
             ),
             Expr::Between {
                 expr,
