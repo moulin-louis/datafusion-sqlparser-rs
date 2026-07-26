@@ -16,6 +16,8 @@
 // under the License.
 
 use crate::dialect::Dialect;
+use crate::keywords::{self, Keyword};
+use crate::parser::Parser;
 
 /// A [`Dialect`] for [ClickHouse](https://clickhouse.com/).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -96,6 +98,16 @@ impl Dialect for ClickHouseDialect {
 
     fn supports_select_wildcard_apply(&self) -> bool {
         true
+    }
+
+    fn supports_table_final(&self) -> bool {
+        true
+    }
+
+    fn is_table_alias(&self, kw: &Keyword, _parser: &mut Parser) -> bool {
+        // `FROM tbl FINAL` is the read-time merge modifier, never a table named
+        // `FINAL`. ClickHouse has no way to spell that alias implicitly.
+        !matches!(kw, Keyword::FINAL) && !keywords::RESERVED_FOR_TABLE_ALIAS.contains(kw)
     }
 
     // ClickHouse uses this for some FORMAT expressions in `INSERT` context, e.g. when inserting

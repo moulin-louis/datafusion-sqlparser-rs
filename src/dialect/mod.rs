@@ -366,6 +366,17 @@ pub trait Dialect: Debug + Any {
         false
     }
 
+    /// Returns true if the dialect supports the ClickHouse `FINAL` table modifier, which
+    /// merges rows at read time: `SELECT ... FROM tbl FINAL`, `SELECT ... FROM tbl AS t FINAL`.
+    ///
+    /// Dialects that return true must also reject `FINAL` as an implicit table alias in
+    /// [`Dialect::is_table_alias`], or `FROM tbl FINAL` parses as a table aliased `FINAL`.
+    ///
+    /// <https://clickhouse.com/docs/sql-reference/statements/select/from#final-modifier>
+    fn supports_table_final(&self) -> bool {
+        false
+    }
+
     /// Returns true if the dialect supports ClickHouse's `APPLY` column
     /// transformer on a wildcard: `SELECT * APPLY(sum) FROM tbl`.
     ///

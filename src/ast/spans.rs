@@ -2005,6 +2005,7 @@ impl Spanned for TableFactor {
                 json_path: _,
                 sample: _,
                 index_hints: _,
+                has_final: _,
             } => union_spans(
                 name.0
                     .iter()
@@ -2021,6 +2022,7 @@ impl Spanned for TableFactor {
                 subquery,
                 alias,
                 sample: _,
+                has_final: _,
             } => subquery
                 .span()
                 .union_opt(&alias.as_ref().map(|alias| alias.span())),

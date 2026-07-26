@@ -2744,6 +2744,7 @@ fn parse_update_with_joins() {
                         json_path: None,
                         sample: None,
                         index_hints: vec![],
+                        has_final: false,
                     },
                     joins: vec![Join {
                         relation: TableFactor::Table {
@@ -2757,6 +2758,7 @@ fn parse_update_with_joins() {
                             json_path: None,
                             sample: None,
                             index_hints: vec![],
+                            has_final: false,
                         },
                         global: false,
                         join_operator: JoinOperator::Join(JoinConstraint::On(Expr::BinaryOp {

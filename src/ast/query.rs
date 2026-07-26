@@ -1660,6 +1660,11 @@ pub enum TableFactor {
         /// Optional index hints(mysql)
         /// See: <https://dev.mysql.com/doc/refman/8.4/en/index-hints.html>
         index_hints: Vec<TableIndexHints>,
+        /// ClickHouse `FINAL` modifier, which merges rows at read time:
+        /// `SELECT * FROM tbl FINAL`, `SELECT * FROM tbl AS t FINAL`.
+        ///
+        /// See: <https://clickhouse.com/docs/sql-reference/statements/select/from#final-modifier>
+        has_final: bool,
     },
     /// A derived table (a parenthesized subquery), optionally `LATERAL`.
     Derived {
@@ -1671,6 +1676,12 @@ pub enum TableFactor {
         alias: Option<TableAlias>,
         /// Optional table sample modifier
         sample: Option<TableSampleKind>,
+        /// ClickHouse `FINAL` modifier. Its parser accepts this after any table
+        /// expression, though only a table backed by a merging engine can
+        /// execute it.
+        ///
+        /// See: <https://clickhouse.com/docs/sql-reference/statements/select/from#final-modifier>
+        has_final: bool,
     },
     /// `TABLE(<expr>)[ AS <alias> ]`
     TableFunction {
@@ -2376,6 +2387,7 @@ impl fmt::Display for TableFactor {
                 json_path,
                 sample,
                 index_hints,
+                has_final,
             } => {
                 name.fmt(f)?;
                 if let Some(json_path) = json_path {
@@ -2416,6 +2428,12 @@ impl fmt::Display for TableFactor {
                 if let Some(version) = version {
                     write!(f, " {version}")?;
                 }
+                // ClickHouse writes `<name> [AS <alias>] FINAL [SAMPLE ...]`:
+                // after the alias, before the sample. It rejects both
+                // `tbl FINAL AS t` and `tbl SAMPLE 1/2 FINAL`.
+                if *has_final {
+                    write!(f, " FINAL")?;
+                }
                 if let Some(TableSampleKind::AfterTableAlias(sample)) = sample {
                     write!(f, " {sample}")?;
                 }
@@ -2426,6 +2444,7 @@ impl fmt::Display for TableFactor {
                 subquery,
                 alias,
                 sample,
+                has_final,
             } => {
                 if *lateral {
                     write!(f, "LATERAL ")?;
@@ -2437,6 +2456,9 @@ impl fmt::Display for TableFactor {
                 f.write_str(")")?;
                 if let Some(alias) = alias {
                     write!(f, " {alias}")?;
+                }
+                if *has_final {
+                    write!(f, " FINAL")?;
                 }
                 if let Some(TableSampleKind::AfterTableAlias(sample)) = sample {
                     write!(f, " {sample}")?;

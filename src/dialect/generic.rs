@@ -16,6 +16,8 @@
 // under the License.
 
 use crate::dialect::Dialect;
+use crate::keywords::{self, Keyword};
+use crate::parser::Parser;
 
 /// A permissive, general purpose [`Dialect`], which parses a wide variety of SQL
 /// statements, from many different dialects.
@@ -63,6 +65,16 @@ impl Dialect for GenericDialect {
 
     fn supports_select_wildcard_apply(&self) -> bool {
         true
+    }
+
+    fn supports_table_final(&self) -> bool {
+        true
+    }
+
+    fn is_table_alias(&self, kw: &Keyword, _parser: &mut Parser) -> bool {
+        // See [`ClickHouseDialect::is_table_alias`]: `FROM tbl FINAL` is a
+        // modifier, so it cannot also be an implicit alias.
+        !matches!(kw, Keyword::FINAL) && !keywords::RESERVED_FOR_TABLE_ALIAS.contains(kw)
     }
 
     fn supports_numeric_field_access(&self) -> bool {

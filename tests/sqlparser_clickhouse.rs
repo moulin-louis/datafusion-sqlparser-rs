@@ -2470,6 +2470,84 @@ fn parse_select_wildcard_apply() {
         .is_err());
 }
 
+#[test]
+fn parse_table_final() {
+    // `FINAL` merges rows at read time. Without it, `FROM tbl FINAL` parses as
+    // a table aliased `FINAL`, which round-trips to `FROM tbl AS FINAL` and
+    // silently drops the merge.
+    for sql in [
+        "SELECT * FROM tbl FINAL",
+        "SELECT * FROM db.tbl FINAL",
+        "SELECT * FROM tbl AS t FINAL",
+        "SELECT * FROM a FINAL JOIN b FINAL ON a.id = b.id",
+        "SELECT count() FROM tbl FINAL WHERE x > 0",
+    ] {
+        clickhouse_and_generic().verified_stmt(sql);
+    }
+
+    let from = clickhouse_and_generic()
+        .verified_only_select("SELECT * FROM tbl AS t FINAL")
+        .from
+        .clone();
+    match &from[..] {
+        [TableWithJoins {
+            relation: TableFactor::Table {
+                alias, has_final, ..
+            },
+            ..
+        }] => {
+            assert!(has_final);
+            assert_eq!(alias.as_ref().map(|a| a.name.value.as_str()), Some("t"));
+        }
+        other => panic!("expected a single table factor, got {other:?}"),
+    }
+
+    // ClickHouse rejects the modifier before the alias, and so does this.
+    assert!(clickhouse()
+        .parse_sql_statements("SELECT * FROM tbl FINAL AS t")
+        .is_err());
+
+    // The order is `<name> [AS <alias>] FINAL [SAMPLE ...]`. Found by running
+    // ClickHouse's own test corpus: `FINAL SAMPLE 1 / 2` is all over it, and
+    // parsing `FINAL` after the sample rejected every one of them.
+    clickhouse_and_generic().verified_stmt("SELECT count() FROM tbl FINAL SAMPLE 1 / 2");
+    clickhouse_and_generic().verified_stmt("SELECT count() FROM tbl AS t FINAL SAMPLE 1 / 2");
+    assert!(clickhouse()
+        .parse_sql_statements("SELECT count() FROM tbl SAMPLE 1 / 2 FINAL")
+        .is_err());
+
+    // ClickHouse's parser takes `FINAL` after any table expression, including a
+    // derived table, and rejects it later during analysis.
+    clickhouse_and_generic().verified_stmt("SELECT * FROM (SELECT 1) FINAL");
+    clickhouse_and_generic().verified_stmt("SELECT * FROM (SELECT 1) AS t FINAL SAMPLE 1 / 2");
+    clickhouse_and_generic().verified_stmt("WITH c AS (SELECT 1) SELECT * FROM c FINAL");
+
+    match &clickhouse_and_generic()
+        .verified_only_select("SELECT * FROM (SELECT 1) FINAL")
+        .from[0]
+        .relation
+    {
+        TableFactor::Derived { has_final, .. } => assert!(has_final),
+        other => panic!("expected a derived table, got {other:?}"),
+    }
+
+    // A dialect without the feature keeps reading `FINAL` as an implicit alias.
+    let postgres = TestedDialects::new(vec![Box::new(PostgreSqlDialect {})]);
+    let select = postgres.verified_only_select("SELECT * FROM tbl AS FINAL");
+    match &select.from[..] {
+        [TableWithJoins {
+            relation: TableFactor::Table {
+                alias, has_final, ..
+            },
+            ..
+        }] => {
+            assert!(!has_final);
+            assert_eq!(alias.as_ref().map(|a| a.name.value.as_str()), Some("FINAL"));
+        }
+        other => panic!("expected a single table factor, got {other:?}"),
+    }
+}
+
 fn clickhouse() -> TestedDialects {
     TestedDialects::new(vec![Box::new(ClickHouseDialect {})])
 }

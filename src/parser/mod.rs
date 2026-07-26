@@ -16725,6 +16725,7 @@ impl<'a> Parser<'a> {
                 }),
                 alias,
                 sample: None,
+                has_final: false,
             })
         } else if dialect_of!(self is BigQueryDialect | PostgreSqlDialect | GenericDialect)
             && self.parse_keyword(Keyword::UNNEST)
@@ -16848,6 +16849,11 @@ impl<'a> Parser<'a> {
                 }
             };
 
+            // ClickHouse orders these `<name> [AS <alias>] FINAL [SAMPLE ...]`,
+            // so the modifier follows the alias but precedes the sample.
+            let has_final =
+                self.dialect.supports_table_final() && self.parse_keyword(Keyword::FINAL);
+
             if !self.dialect.supports_table_sample_before_alias() {
                 if let Some(parsed_sample) = self.maybe_parse_table_sample()? {
                     sample = Some(TableSampleKind::AfterTableAlias(parsed_sample));
@@ -16865,6 +16871,7 @@ impl<'a> Parser<'a> {
                 json_path,
                 sample,
                 index_hints,
+                has_final,
             };
 
             while let Some(kw) = self.parse_one_of_keywords(&[Keyword::PIVOT, Keyword::UNPIVOT]) {
@@ -16915,6 +16922,7 @@ impl<'a> Parser<'a> {
             json_path: None,
             sample: None,
             index_hints: vec![],
+            has_final: false,
         })
     }
 
@@ -17594,6 +17602,10 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::RParen)?;
         let alias = self.maybe_parse_table_alias()?;
 
+        // ClickHouse orders these `(<subquery>) [AS <alias>] FINAL [SAMPLE ...]`,
+        // the same as for a named table.
+        let has_final = self.dialect.supports_table_final() && self.parse_keyword(Keyword::FINAL);
+
         // Parse optional SAMPLE clause after alias
         let sample = self
             .maybe_parse_table_sample()?
@@ -17607,6 +17619,7 @@ impl<'a> Parser<'a> {
             subquery,
             alias,
             sample,
+            has_final,
         })
     }
 
