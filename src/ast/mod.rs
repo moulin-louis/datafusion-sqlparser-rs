@@ -957,7 +957,7 @@ pub enum Expr {
         /// `true` when `NOT` is present.
         negated: bool,
     },
-    /// `[ NOT ] IN (val1, val2, ...)`
+    /// `[ GLOBAL ] [ NOT ] IN (val1, val2, ...)`
     InList {
         /// Left-hand expression to test for membership.
         expr: Box<Expr>,
@@ -965,8 +965,12 @@ pub enum Expr {
         list: Vec<Expr>,
         /// `true` when the `NOT` modifier is present.
         negated: bool,
+        /// `true` when the ClickHouse `GLOBAL` modifier is present.
+        ///
+        /// <https://clickhouse.com/docs/sql-reference/operators/in>
+        global: bool,
     },
-    /// `[ NOT ] IN (SELECT ...)`
+    /// `[ GLOBAL ] [ NOT ] IN (SELECT ...)`
     InSubquery {
         /// Left-hand expression to test for membership.
         expr: Box<Expr>,
@@ -974,8 +978,12 @@ pub enum Expr {
         subquery: Box<Query>,
         /// `true` when the `NOT` modifier is present.
         negated: bool,
+        /// `true` when the ClickHouse `GLOBAL` modifier is present.
+        ///
+        /// <https://clickhouse.com/docs/sql-reference/operators/in>
+        global: bool,
     },
-    /// `[ NOT ] IN UNNEST(array_expression)`
+    /// `[ GLOBAL ] [ NOT ] IN UNNEST(array_expression)`
     InUnnest {
         /// Left-hand expression to test for membership.
         expr: Box<Expr>,
@@ -983,6 +991,10 @@ pub enum Expr {
         array_expr: Box<Expr>,
         /// `true` when the `NOT` modifier is present.
         negated: bool,
+        /// `true` when the ClickHouse `GLOBAL` modifier is present.
+        ///
+        /// <https://clickhouse.com/docs/sql-reference/operators/in>
+        global: bool,
     },
     /// `<expr> [ NOT ] BETWEEN <low> AND <high>`
     Between {
@@ -1754,10 +1766,12 @@ impl fmt::Display for Expr {
                 expr,
                 list,
                 negated,
+                global,
             } => write!(
                 f,
-                "{} {}IN ({})",
+                "{} {}{}IN ({})",
                 expr,
+                if *global { "GLOBAL " } else { "" },
                 if *negated { "NOT " } else { "" },
                 display_comma_separated(list)
             ),
@@ -1765,10 +1779,12 @@ impl fmt::Display for Expr {
                 expr,
                 subquery,
                 negated,
+                global,
             } => write!(
                 f,
-                "{} {}IN ({})",
+                "{} {}{}IN ({})",
                 expr,
+                if *global { "GLOBAL " } else { "" },
                 if *negated { "NOT " } else { "" },
                 subquery
             ),
@@ -1776,10 +1792,12 @@ impl fmt::Display for Expr {
                 expr,
                 array_expr,
                 negated,
+                global,
             } => write!(
                 f,
-                "{} {}IN UNNEST({})",
+                "{} {}{}IN UNNEST({})",
                 expr,
+                if *global { "GLOBAL " } else { "" },
                 if *negated { "NOT " } else { "" },
                 array_expr
             ),

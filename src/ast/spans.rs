@@ -1502,6 +1502,7 @@ impl Spanned for Expr {
                 expr,
                 list,
                 negated: _,
+                global: _,
             } => union_spans(
                 core::iter::once(expr.span()).chain(list.iter().map(|item| item.span())),
             ),
@@ -1509,11 +1510,13 @@ impl Spanned for Expr {
                 expr,
                 subquery,
                 negated: _,
+                global: _,
             } => expr.span().union(&subquery.span()),
             Expr::InUnnest {
                 expr,
                 array_expr,
                 negated: _,
+                global: _,
             } => expr.span().union(&array_expr.span()),
             Expr::Between {
                 expr,
