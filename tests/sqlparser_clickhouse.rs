@@ -1869,6 +1869,98 @@ fn parse_in_unparenthesized_dictionary_placeholder() {
     clickhouse().verified_expr("x IN ({p: Array(UInt64)}) AND y = 1");
 }
 
+#[test]
+fn parse_asof_join() {
+    // ASOF JOIN with an ON constraint, where the closest-match (inequality) condition is
+    // the last conjunct. ClickHouse does not use Snowflake's MATCH_CONDITION clause.
+    let sql = concat!(
+        "SELECT t.symbol, q.bid FROM md.trades AS t ",
+        "ASOF JOIN md.quotes AS q ON t.symbol = q.symbol AND t.ts >= q.ts"
+    );
+    match clickhouse_and_generic().verified_stmt(sql) {
+        Statement::Query(query) => {
+            let select = query.body.as_select().unwrap();
+            let join = &select.from[0].joins[0];
+            assert!(matches!(
+                join.join_operator,
+                JoinOperator::AsOfJoin(JoinConstraint::On(_))
+            ));
+        }
+        _ => unreachable!(),
+    }
+
+    // ASOF JOIN with a USING constraint, where the ASOF column is listed last.
+    match clickhouse_and_generic()
+        .verified_stmt("SELECT * FROM trades AS t ASOF JOIN quotes AS q USING(symbol, ts)")
+    {
+        Statement::Query(query) => {
+            let select = query.body.as_select().unwrap();
+            let join = &select.from[0].joins[0];
+            assert!(matches!(
+                join.join_operator,
+                JoinOperator::AsOfJoin(JoinConstraint::Using(_))
+            ));
+        }
+        _ => unreachable!(),
+    }
+
+    // As for the other join operators, a missing constraint is left to the analyzer.
+    clickhouse_and_generic().verified_stmt("SELECT * FROM trades AS t ASOF JOIN quotes AS q");
+}
+
+#[test]
+fn parse_asof_left_join() {
+    let sql = concat!(
+        "SELECT t.symbol, q.bid FROM md.trades AS t ",
+        "ASOF LEFT JOIN md.quotes AS q ON t.symbol = q.symbol AND t.ts >= q.ts"
+    );
+    match clickhouse_and_generic().verified_stmt(sql) {
+        Statement::Query(query) => {
+            let select = query.body.as_select().unwrap();
+            let join = &select.from[0].joins[0];
+            assert!(matches!(
+                join.join_operator,
+                JoinOperator::AsOfLeftJoin(JoinConstraint::On(_))
+            ));
+        }
+        _ => unreachable!(),
+    }
+
+    clickhouse_and_generic()
+        .verified_stmt("SELECT * FROM trades AS t ASOF LEFT JOIN quotes AS q USING(symbol, ts)");
+
+    // ClickHouse documents the join kind before the strictness modifier, so
+    // `LEFT ASOF JOIN` is accepted as well. `ASOF LEFT JOIN` is the canonical form.
+    clickhouse_and_generic().one_statement_parses_to(
+        "SELECT * FROM trades AS t LEFT ASOF JOIN quotes AS q USING (ts)",
+        "SELECT * FROM trades AS t ASOF LEFT JOIN quotes AS q USING(ts)",
+    );
+
+    // Only `LEFT` pairs with `ASOF`; ClickHouse has no right/full ASOF join.
+    clickhouse_and_generic()
+        .parse_sql_statements("SELECT * FROM trades AS t RIGHT ASOF JOIN quotes AS q USING (ts)")
+        .expect_err("RIGHT ASOF JOIN is not valid ClickHouse syntax");
+}
+
+#[test]
+fn parse_asof_left_join_rejects_match_condition() {
+    // Snowflake's `MATCH_CONDITION` flavor of `ASOF JOIN` has no left/inner
+    // distinction, so combining it with `LEFT` would silently drop the `LEFT` and
+    // turn an outer join into an inner one.
+    let sql = concat!(
+        "SELECT * FROM trades AS t ASOF LEFT JOIN quotes AS q ",
+        "MATCH_CONDITION (t.ts >= q.ts) ON t.sym = q.sym"
+    );
+    assert_eq!(
+        ParserError(
+            "Expected: ON or USING after ASOF LEFT JOIN, found: MATCH_CONDITION".to_string()
+        ),
+        clickhouse_and_generic()
+            .parse_sql_statements(sql)
+            .unwrap_err()
+    );
+}
+
 fn clickhouse() -> TestedDialects {
     TestedDialects::new(vec![Box::new(ClickHouseDialect {})])
 }

@@ -16197,17 +16197,40 @@ impl<'a> Parser<'a> {
                     join_operator: JoinOperator::OuterApply,
                 }
             } else if self.parse_keyword(Keyword::ASOF) {
+                // ClickHouse: `ASOF JOIN` / `ASOF LEFT JOIN`, where the closest-match
+                // condition is part of the `ON`/`USING` constraint.
+                let asof_without_match_condition =
+                    self.dialect.supports_asof_join_without_match_condition();
+                let is_left = asof_without_match_condition && self.parse_keyword(Keyword::LEFT);
                 self.expect_keyword_is(Keyword::JOIN)?;
                 let relation = self.parse_table_factor()?;
-                self.expect_keyword_is(Keyword::MATCH_CONDITION)?;
-                let match_condition = self.parse_parenthesized(Self::parse_expr)?;
+                let join_operator = if asof_without_match_condition
+                    && !self.peek_keyword(Keyword::MATCH_CONDITION)
+                {
+                    let constraint = self.parse_join_constraint(false)?;
+                    if is_left {
+                        JoinOperator::AsOfLeftJoin(constraint)
+                    } else {
+                        JoinOperator::AsOfJoin(constraint)
+                    }
+                } else if is_left {
+                    // Snowflake's `MATCH_CONDITION` flavor has no left/inner distinction,
+                    // so accepting `LEFT` here would silently turn an outer join into an
+                    // inner one.
+                    return self
+                        .expected_ref("ON or USING after ASOF LEFT JOIN", self.peek_token_ref());
+                } else {
+                    self.expect_keyword_is(Keyword::MATCH_CONDITION)?;
+                    let match_condition = self.parse_parenthesized(Self::parse_expr)?;
+                    JoinOperator::AsOf {
+                        match_condition,
+                        constraint: self.parse_join_constraint(false)?,
+                    }
+                };
                 Join {
                     relation,
                     global,
-                    join_operator: JoinOperator::AsOf {
-                        match_condition,
-                        constraint: self.parse_join_constraint(false)?,
-                    },
+                    join_operator,
                 }
             } else if self.dialect.supports_array_join_syntax()
                 && self.parse_keywords(&[Keyword::INNER, Keyword::ARRAY, Keyword::JOIN])
@@ -16257,48 +16280,59 @@ impl<'a> Parser<'a> {
                     kw @ Keyword::LEFT | kw @ Keyword::RIGHT => {
                         let _ = self.next_token(); // consume LEFT/RIGHT
                         let is_left = kw == Keyword::LEFT;
-                        let join_type = self.parse_one_of_keywords(&[
-                            Keyword::OUTER,
-                            Keyword::SEMI,
-                            Keyword::ANTI,
-                            Keyword::JOIN,
-                        ]);
-                        match join_type {
-                            Some(Keyword::OUTER) => {
-                                self.expect_keyword_is(Keyword::JOIN)?;
-                                if is_left {
-                                    JoinOperator::LeftOuter
-                                } else {
-                                    JoinOperator::RightOuter
+                        if is_left
+                            && self.dialect.supports_asof_join_without_match_condition()
+                            && self.parse_keyword(Keyword::ASOF)
+                        {
+                            // ClickHouse documents the join kind before the strictness
+                            // modifier, so `LEFT ASOF JOIN` is a synonym for
+                            // `ASOF LEFT JOIN`. Only `LEFT` pairs with `ASOF`.
+                            self.expect_keyword_is(Keyword::JOIN)?;
+                            JoinOperator::AsOfLeftJoin
+                        } else {
+                            let join_type = self.parse_one_of_keywords(&[
+                                Keyword::OUTER,
+                                Keyword::SEMI,
+                                Keyword::ANTI,
+                                Keyword::JOIN,
+                            ]);
+                            match join_type {
+                                Some(Keyword::OUTER) => {
+                                    self.expect_keyword_is(Keyword::JOIN)?;
+                                    if is_left {
+                                        JoinOperator::LeftOuter
+                                    } else {
+                                        JoinOperator::RightOuter
+                                    }
                                 }
-                            }
-                            Some(Keyword::SEMI) => {
-                                self.expect_keyword_is(Keyword::JOIN)?;
-                                if is_left {
-                                    JoinOperator::LeftSemi
-                                } else {
-                                    JoinOperator::RightSemi
+                                Some(Keyword::SEMI) => {
+                                    self.expect_keyword_is(Keyword::JOIN)?;
+                                    if is_left {
+                                        JoinOperator::LeftSemi
+                                    } else {
+                                        JoinOperator::RightSemi
+                                    }
                                 }
-                            }
-                            Some(Keyword::ANTI) => {
-                                self.expect_keyword_is(Keyword::JOIN)?;
-                                if is_left {
-                                    JoinOperator::LeftAnti
-                                } else {
-                                    JoinOperator::RightAnti
+                                Some(Keyword::ANTI) => {
+                                    self.expect_keyword_is(Keyword::JOIN)?;
+                                    if is_left {
+                                        JoinOperator::LeftAnti
+                                    } else {
+                                        JoinOperator::RightAnti
+                                    }
                                 }
-                            }
-                            Some(Keyword::JOIN) => {
-                                if is_left {
-                                    JoinOperator::Left
-                                } else {
-                                    JoinOperator::Right
+                                Some(Keyword::JOIN) => {
+                                    if is_left {
+                                        JoinOperator::Left
+                                    } else {
+                                        JoinOperator::Right
+                                    }
                                 }
-                            }
-                            _ => {
-                                return Err(ParserError::ParserError(format!(
-                                    "expected OUTER, SEMI, ANTI or JOIN after {kw:?}"
-                                )))
+                                _ => {
+                                    return Err(ParserError::ParserError(format!(
+                                        "expected OUTER, SEMI, ANTI or JOIN after {kw:?}"
+                                    )))
+                                }
                             }
                         }
                     }

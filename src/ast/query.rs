@@ -2779,6 +2779,16 @@ impl fmt::Display for Join {
                 self.relation,
                 suffix(constraint)
             )),
+            JoinOperator::AsOfJoin(constraint) => f.write_fmt(format_args!(
+                "ASOF JOIN {}{}",
+                self.relation,
+                suffix(constraint)
+            )),
+            JoinOperator::AsOfLeftJoin(constraint) => f.write_fmt(format_args!(
+                "ASOF LEFT JOIN {}{}",
+                self.relation,
+                suffix(constraint)
+            )),
             JoinOperator::StraightJoin(constraint) => f.write_fmt(format_args!(
                 "STRAIGHT_JOIN {}{}",
                 self.relation,
@@ -2841,6 +2851,13 @@ pub enum JoinOperator {
         /// Additional constraint applied to the `ASOF` join.
         constraint: JoinConstraint,
     },
+    /// ClickHouse: `ASOF JOIN`, where the closest-match condition is part of the
+    /// `ON`/`USING` constraint instead of a dedicated `MATCH_CONDITION` clause.
+    ///
+    /// See <https://clickhouse.com/docs/sql-reference/statements/select/join>.
+    AsOfJoin(JoinConstraint),
+    /// ClickHouse: `ASOF LEFT JOIN`, the outer-join flavor of [`JoinOperator::AsOfJoin`].
+    AsOfLeftJoin(JoinConstraint),
     /// `STRAIGHT_JOIN` (MySQL non-standard behavior)
     ///
     /// See <https://dev.mysql.com/doc/refman/8.4/en/join.html>.
