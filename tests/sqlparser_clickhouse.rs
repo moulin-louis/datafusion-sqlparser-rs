@@ -2153,6 +2153,76 @@ fn parse_scalar_with_unsupported_by_other_dialects() {
     );
 }
 
+#[test]
+fn parse_positional_tuple_access() {
+    // Positional (1-based) tuple access, e.g. inside a lambda.
+    clickhouse().verified_stmt("SELECT arrayMap(x -> x.2, pairs) FROM analytics.kv_store");
+    clickhouse().verified_stmt("SELECT arrayMap(x -> x.2, [('a', 1), ('b', 2)])");
+
+    // Plain positional access on a qualified column.
+    clickhouse().verified_stmt("SELECT t.1 FROM t");
+    // Chained after a regular field access, e.g. `<table>.<tuple column>.<position>`.
+    clickhouse().verified_stmt("SELECT a.b.2 FROM t");
+    // Positional access composes with other expressions.
+    clickhouse().verified_stmt("SELECT t.2 + 1 AS c FROM t");
+    clickhouse().verified_stmt("SELECT t.2[1] FROM t");
+    clickhouse().verified_stmt("SELECT t.1, 1.5 FROM t");
+    clickhouse().verified_stmt("SELECT * FROM t WHERE t.1 > 1.5");
+    clickhouse().verified_stmt("SELECT arrayMap(x -> x.1.2, pairs) FROM t");
+
+    // The AST reuses the existing compound field access node, with the
+    // position stored as a numeric value.
+    let select = clickhouse().verified_only_select("SELECT t.2 FROM t");
+    assert_eq!(
+        select.projection[0],
+        UnnamedExpr(Expr::CompoundFieldAccess {
+            root: Box::new(Identifier(Ident::new("t"))),
+            access_chain: vec![AccessExpr::Dot(Expr::Value(
+                Value::Number("2".parse().unwrap(), false).with_empty_span()
+            ))],
+        })
+    );
+
+    // Chained positional access into a nested tuple.
+    clickhouse().verified_stmt("SELECT t.1.2 FROM t");
+    let select = clickhouse().verified_only_select("SELECT t.1.2 FROM t");
+    assert_eq!(
+        select.projection[0],
+        UnnamedExpr(Expr::CompoundFieldAccess {
+            root: Box::new(Identifier(Ident::new("t"))),
+            access_chain: vec![
+                AccessExpr::Dot(Expr::Value(
+                    Value::Number("1".parse().unwrap(), false).with_empty_span()
+                )),
+                AccessExpr::Dot(Expr::Value(
+                    Value::Number("2".parse().unwrap(), false).with_empty_span()
+                )),
+            ],
+        })
+    );
+
+    // Regressions: float literals must not be affected.
+    clickhouse().verified_stmt("SELECT 1.2");
+    clickhouse().one_statement_parses_to("SELECT .2", "SELECT 0.2");
+    // A space before the dot keeps the float interpretation, so `.2` is a
+    // stray literal rather than a field access.
+    assert_eq!(
+        clickhouse()
+            .parse_sql_statements("SELECT x .2")
+            .unwrap_err()
+            .to_string(),
+        "sql parser error: Expected: end of statement, found: .2"
+    );
+    clickhouse().one_statement_parses_to("SELECT 1.2e3", "SELECT 1200");
+    clickhouse().one_statement_parses_to("SELECT 1_000.5", "SELECT 1000.5");
+
+    // Dialects without the feature keep treating `.2` as a float literal,
+    // which yields a syntax error in this position.
+    assert!(TestedDialects::new(vec![Box::new(GenericDialect {})])
+        .parse_sql_statements("SELECT t.2 FROM t")
+        .is_err());
+}
+
 fn clickhouse() -> TestedDialects {
     TestedDialects::new(vec![Box::new(ClickHouseDialect {})])
 }

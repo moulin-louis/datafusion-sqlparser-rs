@@ -523,6 +523,18 @@ pub trait Dialect: Debug + Any {
         false
     }
 
+    /// Returns true if the dialect supports accessing a field by its (1-based)
+    /// position using dot notation, e.g. ClickHouse's positional tuple access
+    /// `SELECT t.2 FROM t`.
+    ///
+    /// When enabled, a `.` that directly follows a word is tokenized as a
+    /// [`Token::Period`] rather than as the start of a decimal number, so that
+    /// `t.2` yields `Word(t) Period Number(2)`. The same applies to a `.` that
+    /// directly follows such a position, so chained access like `t.1.2` works.
+    fn supports_numeric_field_access(&self) -> bool {
+        false
+    }
+
     /// Returns true if the dialects supports specifying null treatment
     /// as part of a window function's parameter list as opposed
     /// to after the parameter list.

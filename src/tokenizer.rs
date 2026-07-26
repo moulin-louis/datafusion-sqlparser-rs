@@ -1381,10 +1381,20 @@ impl<'a> Tokenizer<'a> {
                         return Ok(Some(Token::HexStringLiteral(s2)));
                     }
 
+                    // For dialects with positional field access, digits that directly
+                    // follow a period are a field position (e.g. `t.1`). A period after
+                    // those digits therefore starts the next access in a chain such as
+                    // `t.1.2` and must not be consumed as a decimal point.
+                    let is_field_position = self.dialect.supports_numeric_field_access()
+                        && !s.is_empty()
+                        && prev_token == Some(&Token::Period);
+
                     // match one period
-                    if let Some('.') = chars.peek() {
-                        s.push('.');
-                        chars.next();
+                    if !is_field_position {
+                        if let Some('.') = chars.peek() {
+                            s.push('.');
+                            chars.next();
+                        }
                     }
 
                     // If the dialect supports identifiers that start with a numeric prefix
@@ -1396,6 +1406,21 @@ impl<'a> Tokenizer<'a> {
                         if let Some(Token::Word(_)) = prev_token {
                             return Ok(Some(Token::Period));
                         }
+                    }
+
+                    // Dialects that support positional field access, such as ClickHouse's
+                    // `tuple.1`, treat a dot that directly follows a word or a number as a
+                    // field access operator rather than as the start of a decimal number,
+                    // so the digits that follow are tokenized as a separate number.
+                    //
+                    // A preceding number can only be seen for a chained access such as
+                    // `t.1.2`, because a decimal point belonging to that number would
+                    // already have been consumed as part of it.
+                    if s == "."
+                        && self.dialect.supports_numeric_field_access()
+                        && matches!(prev_token, Some(Token::Word(_) | Token::Number(_, _)))
+                    {
+                        return Ok(Some(Token::Period));
                     }
 
                     // Consume fractional digits.
@@ -4298,6 +4323,214 @@ mod tests {
                 Token::make_word("t", None),
                 Token::Period,
                 Token::make_word("1two3", None),
+            ],
+        );
+    }
+
+    #[test]
+    fn tokenize_numeric_field_access_trait() {
+        #[derive(Debug)]
+        struct NumericFieldAccessDialect;
+
+        impl Dialect for NumericFieldAccessDialect {
+            fn is_identifier_start(&self, ch: char) -> bool {
+                ch.is_ascii_lowercase() || ch.is_ascii_uppercase() || ch == '_'
+            }
+
+            fn is_identifier_part(&self, ch: char) -> bool {
+                ch.is_ascii_lowercase()
+                    || ch.is_ascii_uppercase()
+                    || ch.is_ascii_digit()
+                    || ch == '_'
+            }
+
+            fn supports_numeric_field_access(&self) -> bool {
+                true
+            }
+        }
+
+        tokenize_numeric_field_access_inner(&NumericFieldAccessDialect {});
+        tokenize_numeric_field_access_inner(&ClickHouseDialect {});
+    }
+
+    fn tokenize_numeric_field_access_inner(dialect: &dyn Dialect) {
+        let tokenize = |sql: &str| Tokenizer::new(dialect, sql).tokenize().unwrap();
+
+        // A dot directly after a word introduces a positional field access.
+        compare(
+            vec![
+                Token::make_word("t", None),
+                Token::Period,
+                Token::Number(String::from("2"), false),
+            ],
+            tokenize("t.2"),
+        );
+
+        compare(
+            vec![
+                Token::make_keyword("SELECT"),
+                Token::Whitespace(Whitespace::Space),
+                Token::make_word("x", None),
+                Token::Period,
+                Token::Number(String::from("2"), false),
+            ],
+            tokenize("SELECT x.2"),
+        );
+
+        // Chained positional access, e.g. into a nested tuple.
+        compare(
+            vec![
+                Token::make_word("t", None),
+                Token::Period,
+                Token::Number(String::from("1"), false),
+                Token::Period,
+                Token::Number(String::from("2"), false),
+            ],
+            tokenize("t.1.2"),
+        );
+
+        // Regression: a float literal following a positional access is unaffected.
+        compare(
+            vec![
+                Token::make_word("t", None),
+                Token::Period,
+                Token::Number(String::from("1"), false),
+                Token::Comma,
+                Token::Whitespace(Whitespace::Space),
+                Token::Number(String::from("1.5"), false),
+            ],
+            tokenize("t.1, 1.5"),
+        );
+
+        // Regression: exponents are still recognized after a positional access.
+        compare(
+            vec![
+                Token::make_word("t", None),
+                Token::Period,
+                Token::Number(String::from("1e3"), false),
+            ],
+            tokenize("t.1e3"),
+        );
+
+        // Regression: a fraction that belongs to a preceding number is untouched.
+        compare(
+            vec![
+                Token::make_keyword("SELECT"),
+                Token::Whitespace(Whitespace::Space),
+                Token::Number(String::from("1.2"), false),
+            ],
+            tokenize("SELECT 1.2"),
+        );
+
+        // Regression: the previous token is a keyword (word) but is separated by
+        // whitespace, so `.2` remains a float literal.
+        compare(
+            vec![
+                Token::make_keyword("SELECT"),
+                Token::Whitespace(Whitespace::Space),
+                Token::Number(String::from(".2"), false),
+            ],
+            tokenize("SELECT .2"),
+        );
+
+        // Regression: same for a word followed by whitespace and then `.2`. This
+        // mirrors the behavior of the `._` special case, which also requires the
+        // dot to directly follow the word.
+        compare(
+            vec![
+                Token::make_word("x", None),
+                Token::Whitespace(Whitespace::Space),
+                Token::Number(String::from(".2"), false),
+            ],
+            tokenize("x .2"),
+        );
+
+        // Regression: exponents are unaffected.
+        compare(
+            vec![Token::Number(String::from("1.2e3"), false)],
+            tokenize("1.2e3"),
+        );
+        compare(
+            vec![Token::Number(String::from("1000.5"), false)],
+            tokenize("1000.5"),
+        );
+
+        // Regression: `._` still yields a period followed by an identifier.
+        compare(
+            vec![
+                Token::make_word("t", None),
+                Token::Period,
+                Token::make_word("_col", None),
+            ],
+            tokenize("t._col"),
+        );
+
+        // Regression: a normal compound identifier is unaffected.
+        compare(
+            vec![
+                Token::make_word("a", None),
+                Token::Period,
+                Token::make_word("b", None),
+            ],
+            tokenize("a.b"),
+        );
+    }
+
+    #[test]
+    fn tokenize_numeric_field_access_underscore_separator() {
+        // ClickHouse also supports underscores as numeric separators; the two
+        // features must not interfere.
+        all_dialects_where(|dialect| {
+            dialect.supports_numeric_field_access()
+                && dialect.supports_numeric_literal_underscores()
+        })
+        .tokenizes_to(
+            "1_000.5",
+            vec![Token::Number(String::from("1_000.5"), false)],
+        );
+    }
+
+    #[test]
+    fn tokenize_numeric_field_access_disabled() {
+        // Dialects without the feature (and without numeric prefixes) keep
+        // consuming `.2` as a float literal.
+        all_dialects_where(|dialect| {
+            !dialect.supports_numeric_field_access() && !dialect.supports_numeric_prefix()
+        })
+        .tokenizes_to(
+            "t.2",
+            vec![
+                Token::make_word("t", None),
+                Token::Number(String::from(".2"), false),
+            ],
+        );
+    }
+
+    #[test]
+    fn tokenize_numeric_field_access_numeric_prefix_unaffected() {
+        // Dialects supporting numeric prefixes must keep tokenizing
+        // `t.2col` as a period followed by the identifier `2col`.
+        all_dialects_where(|dialect| dialect.supports_numeric_prefix()).tokenizes_to(
+            "t.2col",
+            vec![
+                Token::make_word("t", None),
+                Token::Period,
+                Token::make_word("2col", None),
+            ],
+        );
+
+        // For dialects that only support positional access, the identifier is
+        // not merged with the leading digits.
+        all_dialects_where(|dialect| {
+            dialect.supports_numeric_field_access() && !dialect.supports_numeric_prefix()
+        })
+        .tokenizes_to(
+            "t.2col",
+            vec![
+                Token::make_word("t", None),
+                Token::Period,
+                Token::Number(String::from("2"), false),
+                Token::make_word("col", None),
             ],
         );
     }
