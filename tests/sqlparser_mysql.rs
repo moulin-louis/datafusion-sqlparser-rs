@@ -2668,7 +2668,8 @@ fn parse_select_with_concatenation_of_exp_number_and_numeric_prefix_column() {
                         relation: table_from_name(ObjectName::from(vec![Ident::with_quote(
                             '"', "table"
                         )])),
-                        joins: vec![]
+                        joins: vec![],
+                        array_joins: vec![],
                     }],
                     lateral_views: vec![],
                     prewhere: None,
