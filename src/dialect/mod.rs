@@ -366,6 +366,18 @@ pub trait Dialect: Debug + Any {
         false
     }
 
+    /// Returns true if the dialect supports ClickHouse's `ANY`/`ALL` join
+    /// strictness, written on either side of the join kind: `ANY LEFT JOIN`,
+    /// `LEFT ANY JOIN`.
+    ///
+    /// Dialects that return false read a leading `ANY`/`ALL` as an implicit
+    /// alias of the preceding table instead.
+    ///
+    /// <https://clickhouse.com/docs/sql-reference/statements/select/join>
+    fn supports_join_strictness(&self) -> bool {
+        false
+    }
+
     /// Returns true if the dialect supports the ClickHouse `FINAL` table modifier, which
     /// merges rows at read time: `SELECT ... FROM tbl FINAL`, `SELECT ... FROM tbl AS t FINAL`.
     ///

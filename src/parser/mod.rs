@@ -16301,6 +16301,18 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse ClickHouse's optional `ANY`/`ALL` join strictness.
+    fn maybe_parse_join_strictness(&mut self) -> Option<JoinStrictness> {
+        if !self.dialect.supports_join_strictness() {
+            return None;
+        }
+        match self.parse_one_of_keywords(&[Keyword::ANY, Keyword::ALL]) {
+            Some(Keyword::ANY) => Some(JoinStrictness::Any),
+            Some(Keyword::ALL) => Some(JoinStrictness::All),
+            _ => None,
+        }
+    }
+
     fn parse_joins(&mut self) -> Result<Vec<Join>, ParserError> {
         let mut joins = vec![];
         loop {
@@ -16312,6 +16324,9 @@ impl<'a> Parser<'a> {
             }
 
             let global = self.parse_keyword(Keyword::GLOBAL);
+            // ClickHouse documents strictness before the join kind, but accepts
+            // it on either side, so the kind arms below look for it again.
+            let mut strictness = self.maybe_parse_join_strictness();
             let join = if self.parse_keyword(Keyword::CROSS) {
                 let join_operator = if self.parse_keyword(Keyword::JOIN) {
                     JoinOperator::CrossJoin(JoinConstraint::None)
@@ -16334,6 +16349,7 @@ impl<'a> Parser<'a> {
                     relation,
                     global,
                     join_operator,
+                    strictness,
                 }
             } else if self.parse_keyword(Keyword::OUTER) {
                 // MSSQL extension, similar to LEFT JOIN LATERAL .. ON 1=1
@@ -16342,6 +16358,7 @@ impl<'a> Parser<'a> {
                     relation: self.parse_table_factor()?,
                     global,
                     join_operator: JoinOperator::OuterApply,
+                    strictness,
                 }
             } else if self.parse_keyword(Keyword::ASOF) {
                 // ClickHouse: `ASOF JOIN` / `ASOF LEFT JOIN`, where the closest-match
@@ -16378,6 +16395,7 @@ impl<'a> Parser<'a> {
                     relation,
                     global,
                     join_operator,
+                    strictness,
                 }
             } else {
                 let natural = self.parse_keyword(Keyword::NATURAL);
@@ -16400,6 +16418,10 @@ impl<'a> Parser<'a> {
                     kw @ Keyword::LEFT | kw @ Keyword::RIGHT => {
                         let _ = self.next_token(); // consume LEFT/RIGHT
                         let is_left = kw == Keyword::LEFT;
+                        if strictness.is_none() {
+                            // `LEFT ANY JOIN` is `ANY LEFT JOIN`.
+                            strictness = self.maybe_parse_join_strictness();
+                        }
                         if is_left
                             && self.dialect.supports_asof_join_without_match_condition()
                             && self.parse_keyword(Keyword::ASOF)
@@ -16456,15 +16478,21 @@ impl<'a> Parser<'a> {
                             }
                         }
                     }
-                    Keyword::ANTI => {
-                        let _ = self.next_token(); // consume ANTI
+                    kw @ Keyword::ANTI | kw @ Keyword::SEMI => {
+                        let _ = self.next_token(); // consume ANTI/SEMI
+                        let is_anti = kw == Keyword::ANTI;
+                        // ClickHouse takes the kind on either side of the
+                        // strictness: `SEMI LEFT JOIN` is `LEFT SEMI JOIN`.
+                        let kind = self.parse_one_of_keywords(&[Keyword::LEFT, Keyword::RIGHT]);
                         self.expect_keyword_is(Keyword::JOIN)?;
-                        JoinOperator::Anti
-                    }
-                    Keyword::SEMI => {
-                        let _ = self.next_token(); // consume SEMI
-                        self.expect_keyword_is(Keyword::JOIN)?;
-                        JoinOperator::Semi
+                        match (kind, is_anti) {
+                            (Some(Keyword::LEFT), true) => JoinOperator::LeftAnti,
+                            (Some(Keyword::LEFT), false) => JoinOperator::LeftSemi,
+                            (Some(Keyword::RIGHT), true) => JoinOperator::RightAnti,
+                            (Some(Keyword::RIGHT), false) => JoinOperator::RightSemi,
+                            (_, true) => JoinOperator::Anti,
+                            (_, false) => JoinOperator::Semi,
+                        }
                     }
                     Keyword::FULL => {
                         let _ = self.next_token(); // consume FULL
@@ -16509,6 +16537,7 @@ impl<'a> Parser<'a> {
                     relation,
                     global,
                     join_operator: join_operator_type(join_constraint),
+                    strictness,
                 }
             };
             joins.push(join);

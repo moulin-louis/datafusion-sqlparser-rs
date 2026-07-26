@@ -2548,6 +2548,74 @@ fn parse_table_final() {
     }
 }
 
+#[test]
+fn parse_join_strictness() {
+    // ClickHouse takes the strictness on either side of the join kind. All of
+    // the pairings below were checked against ClickHouse 26.7.1.
+    for sql in [
+        "SELECT * FROM t ANY JOIN u USING(a)",
+        "SELECT * FROM t ALL JOIN u USING(a)",
+        "SELECT * FROM t ANY LEFT JOIN u USING(a)",
+        "SELECT * FROM t ALL LEFT JOIN u USING(a)",
+        "SELECT * FROM t ANY RIGHT JOIN u USING(a)",
+        "SELECT * FROM t ANY INNER JOIN u USING(a)",
+        "SELECT * FROM t GLOBAL ANY LEFT JOIN u USING(a)",
+        "SELECT * FROM t LEFT SEMI JOIN u USING(a)",
+        "SELECT * FROM t RIGHT ANTI JOIN u USING(a)",
+        "SELECT * FROM t SEMI JOIN u USING(a)",
+    ] {
+        clickhouse_and_generic().verified_stmt(sql);
+    }
+
+    // The kind may come first; ClickHouse's own order is strictness first, so
+    // that is what gets rendered back.
+    for (written, rendered) in [
+        (
+            "SELECT * FROM t LEFT ANY JOIN u USING(a)",
+            "SELECT * FROM t ANY LEFT JOIN u USING(a)",
+        ),
+        (
+            "SELECT * FROM t LEFT ALL JOIN u USING(a)",
+            "SELECT * FROM t ALL LEFT JOIN u USING(a)",
+        ),
+        (
+            "SELECT * FROM t SEMI LEFT JOIN u USING(a)",
+            "SELECT * FROM t LEFT SEMI JOIN u USING(a)",
+        ),
+        (
+            "SELECT * FROM t ANTI RIGHT JOIN u USING(a)",
+            "SELECT * FROM t RIGHT ANTI JOIN u USING(a)",
+        ),
+    ] {
+        clickhouse_and_generic().one_statement_parses_to(written, rendered);
+    }
+
+    let join =
+        |sql: &str| clickhouse_and_generic().verified_only_select(sql).from[0].joins[0].clone();
+
+    // Without this, `ANY` was swallowed as an implicit alias of the left table
+    // and the join silently became a plain `LEFT JOIN`.
+    let any_left = join("SELECT * FROM t ANY LEFT JOIN u USING(a)");
+    assert_eq!(any_left.strictness, Some(JoinStrictness::Any));
+    assert!(matches!(any_left.join_operator, JoinOperator::Left(_)));
+
+    let all_left = join("SELECT * FROM t ALL LEFT JOIN u USING(a)");
+    assert_eq!(all_left.strictness, Some(JoinStrictness::All));
+
+    let plain = join("SELECT * FROM t LEFT JOIN u USING(a)");
+    assert_eq!(plain.strictness, None);
+
+    // `SEMI`/`ANTI` stay in the operator, so strictness is free for `ANY`/`ALL`.
+    let semi = join("SELECT * FROM t LEFT SEMI JOIN u USING(a)");
+    assert_eq!(semi.strictness, None);
+    assert!(matches!(semi.join_operator, JoinOperator::LeftSemi(_)));
+
+    // A dialect without the feature keeps reading `ANY` as an alias.
+    let postgres = TestedDialects::new(vec![Box::new(PostgreSqlDialect {})]);
+    let select = postgres.verified_only_select("SELECT * FROM t AS ANY LEFT JOIN u USING(a)");
+    assert_eq!(select.from[0].joins[0].strictness, None);
+}
+
 fn clickhouse() -> TestedDialects {
     TestedDialects::new(vec![Box::new(ClickHouseDialect {})])
 }

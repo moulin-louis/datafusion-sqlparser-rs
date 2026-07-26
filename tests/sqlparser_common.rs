@@ -7453,6 +7453,7 @@ fn parse_implicit_join() {
                     relation: table_from_name(ObjectName::from(vec!["t1b".into()])),
                     global: false,
                     join_operator: JoinOperator::Join(JoinConstraint::Natural),
+                    strictness: None,
                 }],
                 array_joins: vec![],
             },
@@ -7462,6 +7463,7 @@ fn parse_implicit_join() {
                     relation: table_from_name(ObjectName::from(vec!["t2b".into()])),
                     global: false,
                     join_operator: JoinOperator::Join(JoinConstraint::Natural),
+                    strictness: None,
                 }],
                 array_joins: vec![],
             },
@@ -7479,6 +7481,7 @@ fn parse_cross_join() {
             relation: table_from_name(ObjectName::from(vec![Ident::new("t2")])),
             global: false,
             join_operator: JoinOperator::CrossJoin(JoinConstraint::None),
+            strictness: None,
         },
         only(only(select.from).joins),
     );
@@ -7491,6 +7494,7 @@ fn parse_cross_join_constraint() {
             relation: table_from_name(ObjectName::from(vec![Ident::new("t2")])),
             global: false,
             join_operator: JoinOperator::CrossJoin(constraint),
+            strictness: None,
         }
     }
 
@@ -7545,6 +7549,7 @@ fn parse_joins_on() {
                 op: BinaryOperator::Eq,
                 right: Box::new(Expr::Identifier("c2".into())),
             })),
+            strictness: None,
         }
     }
     // Test parsing of aliases
@@ -7686,6 +7691,7 @@ fn parse_joins_using() {
             join_operator: f(JoinConstraint::Using(vec![ObjectName::from(vec![
                 "c1".into()
             ])])),
+            strictness: None,
         }
     }
     // Test parsing of aliases
@@ -7780,6 +7786,7 @@ fn parse_natural_join() {
             },
             global: false,
             join_operator: f(JoinConstraint::Natural),
+            strictness: None,
         }
     }
 
@@ -8093,6 +8100,7 @@ fn parse_derived_tables() {
                     relation: table_from_name(ObjectName::from(vec!["t2".into()])),
                     global: false,
                     join_operator: JoinOperator::Join(JoinConstraint::Natural),
+                    strictness: None,
                 }],
                 array_joins: vec![],
             }),
@@ -9210,6 +9218,7 @@ fn lateral_function() {
                 },
                 global: false,
                 join_operator: JoinOperator::Left(JoinConstraint::None),
+                strictness: None,
             }],
             array_joins: vec![],
         }],
@@ -17623,6 +17632,7 @@ fn test_nested_join_without_parentheses() {
                                 Ident::new("customer_id".to_string())
                             ])),
                         })),
+                        strictness: None,
                     }],
                     array_joins: vec![],
                 }),
@@ -17639,7 +17649,8 @@ fn test_nested_join_without_parentheses() {
                     Ident::new("o".to_string()),
                     Ident::new("order_id".to_string())
                 ])),
-            }))
+            })),
+            strictness: None,
         }],
     );
 
@@ -17693,6 +17704,7 @@ fn test_nested_join_without_parentheses() {
                                 Ident::new("customer_id".to_string())
                             ])),
                         })),
+                        strictness: None,
                     }],
                     array_joins: vec![],
                 }),
@@ -17709,7 +17721,8 @@ fn test_nested_join_without_parentheses() {
                     Ident::new("o".to_string()),
                     Ident::new("order_id".to_string())
                 ])),
-            }))
+            })),
+            strictness: None,
         }],
     );
 
@@ -17763,6 +17776,7 @@ fn test_nested_join_without_parentheses() {
                                 Ident::new("customer_id".to_string())
                             ])),
                         })),
+                        strictness: None,
                     }],
                     array_joins: vec![],
                 }),
@@ -17779,7 +17793,8 @@ fn test_nested_join_without_parentheses() {
                     Ident::new("o".to_string()),
                     Ident::new("order_id".to_string())
                 ])),
-            }))
+            })),
+            strictness: None,
         }],
     );
 
@@ -17833,6 +17848,7 @@ fn test_nested_join_without_parentheses() {
                                 Ident::new("customer_id".to_string())
                             ])),
                         })),
+                        strictness: None,
                     }],
                     array_joins: vec![],
                 }),
@@ -17849,7 +17865,8 @@ fn test_nested_join_without_parentheses() {
                     Ident::new("o".to_string()),
                     Ident::new("order_id".to_string())
                 ])),
-            }))
+            })),
+            strictness: None,
         }],
     );
 
@@ -17905,6 +17922,7 @@ fn test_nested_join_without_parentheses() {
                                 ])),
                             }
                         )),
+                        strictness: None,
                     }],
                     array_joins: vec![],
                 }),
@@ -17921,7 +17939,8 @@ fn test_nested_join_without_parentheses() {
                     Ident::new("o".to_string()),
                     Ident::new("order_id".to_string())
                 ])),
-            }))
+            })),
+            strictness: None,
         }],
     );
 }

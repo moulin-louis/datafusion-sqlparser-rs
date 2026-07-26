@@ -3178,6 +3178,7 @@ fn asof_joins() {
                     },
                     constraint: JoinConstraint::None,
                 },
+                strictness: None,
             }],
             array_joins: vec![],
         }

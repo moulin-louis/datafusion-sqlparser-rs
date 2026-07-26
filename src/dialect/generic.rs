@@ -71,10 +71,15 @@ impl Dialect for GenericDialect {
         true
     }
 
+    fn supports_join_strictness(&self) -> bool {
+        true
+    }
+
     fn is_table_alias(&self, kw: &Keyword, _parser: &mut Parser) -> bool {
-        // See [`ClickHouseDialect::is_table_alias`]: `FROM tbl FINAL` is a
-        // modifier, so it cannot also be an implicit alias.
-        !matches!(kw, Keyword::FINAL) && !keywords::RESERVED_FOR_TABLE_ALIAS.contains(kw)
+        // See [`ClickHouseDialect::is_table_alias`]: each of these introduces a
+        // modifier, so none can also be an implicit alias.
+        !matches!(kw, Keyword::FINAL | Keyword::ANY | Keyword::ALL)
+            && !keywords::RESERVED_FOR_TABLE_ALIAS.contains(kw)
     }
 
     fn supports_numeric_field_access(&self) -> bool {

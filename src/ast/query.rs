@@ -2845,8 +2845,41 @@ pub struct Join {
     /// ClickHouse supports the optional `GLOBAL` keyword before the join operator.
     /// See [ClickHouse](https://clickhouse.com/docs/en/sql-reference/statements/select/join)
     pub global: bool,
+    /// ClickHouse `ANY`/`ALL` strictness, deciding how many rows a match may
+    /// produce. `ALL` is the default.
+    ///
+    /// The other strictness modifiers ClickHouse documents -- `SEMI`, `ANTI`
+    /// and `ASOF` -- change which rows are emitted rather than how many, and
+    /// are carried by [`JoinOperator`] instead.
+    ///
+    /// See [ClickHouse](https://clickhouse.com/docs/sql-reference/statements/select/join)
+    pub strictness: Option<JoinStrictness>,
     /// The join operator and its constraint (INNER/LEFT/RIGHT/CROSS/ASOF/etc.).
     pub join_operator: JoinOperator,
+}
+
+/// ClickHouse join strictness: how many matching rows a join may produce.
+///
+/// Written either before or after the join kind -- `ANY LEFT JOIN` and
+/// `LEFT ANY JOIN` are the same join -- and rendered back in ClickHouse's
+/// documented order, before the kind.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "visitor", derive(Visit, VisitMut))]
+pub enum JoinStrictness {
+    /// `ANY`: at most one matching row from the right table.
+    Any,
+    /// `ALL`: every matching row, which is the default.
+    All,
+}
+
+impl fmt::Display for JoinStrictness {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            JoinStrictness::Any => "ANY",
+            JoinStrictness::All => "ALL",
+        })
+    }
 }
 
 impl fmt::Display for Join {
@@ -2874,6 +2907,9 @@ impl fmt::Display for Join {
         }
         if self.global {
             write!(f, "GLOBAL ")?;
+        }
+        if let Some(strictness) = self.strictness {
+            write!(f, "{strictness} ")?;
         }
 
         match &self.join_operator {

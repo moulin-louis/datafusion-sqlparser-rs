@@ -2772,6 +2772,7 @@ fn parse_update_with_joins() {
                                 Ident::new("id")
                             ]))
                         })),
+                        strictness: None,
                     }],
                     array_joins: vec![],
                 },

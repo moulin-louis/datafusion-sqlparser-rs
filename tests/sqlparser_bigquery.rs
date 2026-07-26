@@ -1794,6 +1794,7 @@ fn parse_join_constraint_unnest_alias() {
                 op: BinaryOperator::Eq,
                 right: Box::new(Expr::Identifier("c2".into())),
             })),
+            strictness: None,
         }]
     );
 }
