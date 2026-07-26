@@ -57,6 +57,10 @@ impl Dialect for GenericDialect {
         true
     }
 
+    fn supports_asof_join_without_match_condition(&self) -> bool {
+        true
+    }
+
     fn supports_group_by_expr(&self) -> bool {
         true
     }

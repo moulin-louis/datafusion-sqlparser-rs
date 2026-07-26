@@ -3230,6 +3230,17 @@ fn asof_joins() {
 }
 
 #[test]
+fn asof_join_requires_match_condition() {
+    // Snowflake has no ClickHouse-style `ASOF JOIN ... ON`: MATCH_CONDITION is mandatory.
+    snowflake()
+        .parse_sql_statements("SELECT * FROM trades AS t ASOF JOIN quotes AS q ON t.ts >= q.ts")
+        .expect_err("Snowflake requires MATCH_CONDITION in an ASOF JOIN");
+    snowflake()
+        .parse_sql_statements("SELECT * FROM trades AS t ASOF LEFT JOIN quotes AS q")
+        .expect_err("Snowflake does not support ASOF LEFT JOIN");
+}
+
+#[test]
 fn test_parse_position() {
     snowflake().verified_query("SELECT position('an', 'banana', 1)");
     snowflake().verified_query("SELECT n, h, POSITION(n IN h) FROM pos");

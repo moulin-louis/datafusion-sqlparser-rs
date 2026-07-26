@@ -378,6 +378,15 @@ pub trait Dialect: Debug + Any {
         false
     }
 
+    /// Returns true if the dialect supports ClickHouse-style `ASOF JOIN` / `ASOF LEFT JOIN`,
+    /// where the closest-match condition is written as part of the `ON`/`USING` constraint
+    /// rather than in Snowflake's dedicated `MATCH_CONDITION (...)` clause.
+    ///
+    /// <https://clickhouse.com/docs/sql-reference/statements/select/join>
+    fn supports_asof_join_without_match_condition(&self) -> bool {
+        false
+    }
+
     /// Returns true if the dialect treats `ALTER USER` as a synonym for `ALTER ROLE`.
     ///
     /// In PostgreSQL, `ALTER USER` and `ALTER ROLE` are synonyms that accept the same
