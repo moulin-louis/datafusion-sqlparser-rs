@@ -14471,7 +14471,7 @@ impl<'a> Parser<'a> {
             Some(With {
                 with_token: with_token.clone().into(),
                 recursive: self.parse_keyword(Keyword::RECURSIVE),
-                cte_tables: self.parse_comma_separated(Parser::parse_cte)?,
+                cte_tables: self.parse_comma_separated(Parser::parse_cte_table)?,
             })
         } else {
             None
@@ -14936,6 +14936,37 @@ impl<'a> Parser<'a> {
             include_null_values,
             without_array_wrapper,
         })
+    }
+
+    /// Parse a single entry of a `WITH` clause.
+    ///
+    /// This is either a standard CTE (`alias [( col1, ... )] [AS] (subquery)`)
+    /// or, for dialects with [`Dialect::supports_scalar_with`], a ClickHouse
+    /// scalar declaration (`<expr> AS <identifier>`).
+    ///
+    /// The standard form is always attempted first, so `WITH x AS (SELECT 1)`
+    /// keeps parsing as a CTE rather than as the scalar expression `x`. The
+    /// scalar form is only reached once the standard form has definitively
+    /// failed, which is what makes `WITH x AS y` resolve to a scalar.
+    pub fn parse_cte_table(&mut self) -> Result<CteTable, ParserError> {
+        if !self.dialect.supports_scalar_with() {
+            return self.parse_cte().map(CteTable::Cte);
+        }
+
+        match self.maybe_parse(|p| p.parse_cte())? {
+            Some(cte) => Ok(CteTable::Cte(cte)),
+            None => self.parse_scalar_cte().map(CteTable::Scalar),
+        }
+    }
+
+    /// Parse a ClickHouse scalar `WITH` declaration: `<expression> AS <identifier>`.
+    ///
+    /// See <https://clickhouse.com/docs/sql-reference/statements/select/with>
+    pub fn parse_scalar_cte(&mut self) -> Result<ScalarCte, ParserError> {
+        let expr = self.parse_expr()?;
+        self.expect_keyword_is(Keyword::AS)?;
+        let alias = self.parse_identifier()?;
+        Ok(ScalarCte { expr, alias })
     }
 
     /// Parse a CTE (`alias [( col1, col2, ... )] [AS] (subquery)`)

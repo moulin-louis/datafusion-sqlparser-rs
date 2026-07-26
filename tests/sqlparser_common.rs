@@ -7893,6 +7893,14 @@ fn parse_join_syntax_variants() {
     );
 }
 
+/// Unwraps a `WITH` list entry that is expected to be a standard CTE.
+fn expect_cte(cte_table: &CteTable) -> &Cte {
+    match cte_table {
+        CteTable::Cte(cte) => cte,
+        other => panic!("Expected: a standard CTE, found: {other:?}"),
+    }
+}
+
 #[test]
 fn parse_ctes() {
     let cte_sqls = vec!["SELECT 1 AS foo", "SELECT 2 AS bar"];
@@ -7903,7 +7911,7 @@ fn parse_ctes() {
 
     fn assert_ctes_in_select(expected: &[&str], sel: &Query) {
         for (i, exp) in expected.iter().enumerate() {
-            let Cte { alias, query, .. } = &sel.with.as_ref().unwrap().cte_tables[i];
+            let Cte { alias, query, .. } = expect_cte(&sel.with.as_ref().unwrap().cte_tables[i]);
             assert_eq!(*exp, query.to_string());
             assert_eq!(false, alias.explicit);
             assert_eq!(
@@ -7947,7 +7955,10 @@ fn parse_ctes() {
     // CTE in a CTE...
     let sql = &format!("WITH outer_cte AS ({with}) SELECT * FROM outer_cte");
     let select = verified_query(sql);
-    assert_ctes_in_select(&cte_sqls, &only(&select.with.unwrap().cte_tables).query);
+    assert_ctes_in_select(
+        &cte_sqls,
+        &expect_cte(only(&select.with.unwrap().cte_tables)).query,
+    );
 }
 
 #[test]
@@ -7959,12 +7970,7 @@ fn parse_cte_renamed_columns() {
             TableAliasColumnDef::from_name("col1"),
             TableAliasColumnDef::from_name("col2")
         ],
-        query
-            .with
-            .unwrap()
-            .cte_tables
-            .first()
-            .unwrap()
+        expect_cte(query.with.unwrap().cte_tables.first().unwrap())
             .alias
             .columns
     );
@@ -7997,7 +8003,7 @@ fn parse_recursive_cte() {
         materialized: None,
         closing_paren_token: AttachedToken::empty(),
     };
-    assert_eq!(with.cte_tables.first().unwrap(), &expected);
+    assert_eq!(expect_cte(with.cte_tables.first().unwrap()), &expected);
 }
 
 #[test]
