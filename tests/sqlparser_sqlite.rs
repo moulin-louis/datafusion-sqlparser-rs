@@ -493,6 +493,7 @@ fn parse_update_tuple_row_values() {
             table: TableWithJoins {
                 relation: table_from_name(ObjectName::from(vec![Ident::new("x")])),
                 joins: vec![],
+                array_joins: vec![],
             },
             from: None,
             returning: None,

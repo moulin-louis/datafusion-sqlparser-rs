@@ -2490,7 +2490,8 @@ fn parse_select_with_numeric_prefix_column_name() {
                         relation: table_from_name(ObjectName::from(vec![Ident::with_quote(
                             '"', "table"
                         )])),
-                        joins: vec![]
+                        joins: vec![],
+                        array_joins: vec![],
                     }],
                     lateral_views: vec![],
                     prewhere: None,
@@ -2768,7 +2769,8 @@ fn parse_update_with_joins() {
                                 Ident::new("id")
                             ]))
                         })),
-                    }]
+                    }],
+                    array_joins: vec![],
                 },
                 table
             );
@@ -3373,7 +3375,8 @@ fn parse_substring_in_select() {
                                 quote_style: None,
                                 span: Span::empty(),
                             }])),
-                            joins: vec![]
+                            joins: vec![],
+                            array_joins: vec![],
                         }],
                         lateral_views: vec![],
                         prewhere: None,

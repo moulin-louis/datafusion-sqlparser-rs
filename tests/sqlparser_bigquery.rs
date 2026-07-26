@@ -1570,7 +1570,8 @@ fn parse_table_identifiers() {
             select.from,
             vec![TableWithJoins {
                 relation: table_from_name(ObjectName::from(expected)),
-                joins: vec![]
+                joins: vec![],
+                array_joins: vec![],
             },]
         );
     }
@@ -1757,7 +1758,8 @@ fn parse_table_time_travel() {
                 sample: None,
                 index_hints: vec![],
             },
-            joins: vec![]
+            joins: vec![],
+            array_joins: vec![],
         },]
     );
 
@@ -2736,6 +2738,7 @@ fn test_export_data() {
                             Ident::new("table1")
                         ])),
                         joins: vec![],
+                        array_joins: vec![],
                     }],
                     lateral_views: vec![],
                     prewhere: None,
@@ -2842,6 +2845,7 @@ fn test_export_data() {
                             Ident::new("table1")
                         ])),
                         joins: vec![],
+                        array_joins: vec![],
                     }],
                     lateral_views: vec![],
                     prewhere: None,

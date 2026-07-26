@@ -29,17 +29,17 @@ use crate::tokenizer::Span;
 
 use super::{
     comments, dcl::SecondaryRoles, value::ValueWithSpan, AccessExpr, AlterColumnOperation,
-    AlterIndexOperation, AlterTableOperation, Analyze, Array, Assignment, AssignmentTarget,
-    AttachedToken, BeginEndStatements, CaseStatement, CloseCursor, ClusteredIndex, ColumnDef,
-    ColumnOption, ColumnOptionDef, ConditionalStatementBlock, ConditionalStatements,
-    ConflictTarget, ConnectByKind, ConstraintCharacteristics, CopySource, CreateIndex, CreateTable,
-    CreateTableOptions, Cte, Delete, DoUpdate, ExceptSelectItem, ExcludeConstraintElement,
-    ExcludeSelectItem, Expr, ExprWithAlias, Fetch, ForValues, FromTable, Function, FunctionArg,
-    FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments, GroupByExpr,
-    HavingBound, IfStatement, IlikeSelectItem, IndexColumn, Insert, Interpolate, InterpolateExpr,
-    Join, JoinConstraint, JoinOperator, JsonPath, JsonPathElem, LateralView, LimitClause,
-    MatchRecognizePattern, Measure, Merge, MergeAction, MergeClause, MergeInsertExpr,
-    MergeInsertKind, MergeUpdateExpr, MergeUpdateKind, NamedParenthesizedList,
+    AlterIndexOperation, AlterTableOperation, Analyze, Array, ArrayJoin, Assignment,
+    AssignmentTarget, AttachedToken, BeginEndStatements, CaseStatement, CloseCursor,
+    ClusteredIndex, ColumnDef, ColumnOption, ColumnOptionDef, ConditionalStatementBlock,
+    ConditionalStatements, ConflictTarget, ConnectByKind, ConstraintCharacteristics, CopySource,
+    CreateIndex, CreateTable, CreateTableOptions, Cte, Delete, DoUpdate, ExceptSelectItem,
+    ExcludeConstraintElement, ExcludeSelectItem, Expr, ExprWithAlias, Fetch, ForValues, FromTable,
+    Function, FunctionArg, FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList,
+    FunctionArguments, GroupByExpr, HavingBound, IfStatement, IlikeSelectItem, IndexColumn, Insert,
+    Interpolate, InterpolateExpr, Join, JoinConstraint, JoinOperator, JsonPath, JsonPathElem,
+    LateralView, LimitClause, MatchRecognizePattern, Measure, Merge, MergeAction, MergeClause,
+    MergeInsertExpr, MergeInsertKind, MergeUpdateExpr, MergeUpdateKind, NamedParenthesizedList,
     NamedWindowDefinition, ObjectName, ObjectNamePart, Offset, OnConflict, OnConflictAction,
     OnInsert, OpenStatement, OrderBy, OrderByExpr, OrderByKind, OutputClause, Parens, Partition,
     PartitionBoundValue, PivotValueSource, ProjectionSelect, Query, RaiseStatement,
@@ -2297,9 +2297,6 @@ impl Spanned for JoinOperator {
             JoinOperator::Anti(join_constraint) => join_constraint.span(),
             JoinOperator::Semi(join_constraint) => join_constraint.span(),
             JoinOperator::StraightJoin(join_constraint) => join_constraint.span(),
-            JoinOperator::ArrayJoin => Span::empty(),
-            JoinOperator::LeftArrayJoin => Span::empty(),
-            JoinOperator::InnerArrayJoin => Span::empty(),
         }
     }
 }
@@ -2320,11 +2317,27 @@ impl Spanned for JoinConstraint {
     }
 }
 
+impl Spanned for ArrayJoin {
+    fn span(&self) -> Span {
+        let ArrayJoin { kind: _, exprs } = self;
+
+        union_spans(exprs.iter().map(|expr| expr.span()))
+    }
+}
+
 impl Spanned for TableWithJoins {
     fn span(&self) -> Span {
-        let TableWithJoins { relation, joins } = self;
+        let TableWithJoins {
+            relation,
+            joins,
+            array_joins,
+        } = self;
 
-        union_spans(core::iter::once(relation.span()).chain(joins.iter().map(|item| item.span())))
+        union_spans(
+            core::iter::once(relation.span())
+                .chain(joins.iter().map(|item| item.span()))
+                .chain(array_joins.iter().map(|item| item.span())),
+        )
     }
 }
 

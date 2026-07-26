@@ -16235,12 +16235,59 @@ impl<'a> Parser<'a> {
         // added to `RESERVED_FOR_TABLE_ALIAS`, otherwise they may be parsed as
         // a table alias.
         let joins = self.parse_joins()?;
-        Ok(TableWithJoins { relation, joins })
+        let array_joins = self.parse_array_joins()?;
+        Ok(TableWithJoins {
+            relation,
+            joins,
+            array_joins,
+        })
+    }
+
+    /// Returns true if an `ARRAY JOIN` clause starts at the current position.
+    fn peek_array_join(&mut self) -> bool {
+        self.dialect.supports_array_join_syntax()
+            && (self.peek_keywords(&[Keyword::ARRAY, Keyword::JOIN])
+                || self.peek_keywords(&[Keyword::LEFT, Keyword::ARRAY, Keyword::JOIN])
+                || self.peek_keywords(&[Keyword::INNER, Keyword::ARRAY, Keyword::JOIN]))
+    }
+
+    /// Parse any ClickHouse `[LEFT|INNER] ARRAY JOIN` clauses following the joins.
+    ///
+    /// Unlike a join, the operands are array-typed expressions with optional
+    /// aliases rather than relations.
+    ///
+    /// See <https://clickhouse.com/docs/sql-reference/statements/select/array-join>
+    fn parse_array_joins(&mut self) -> Result<Vec<ArrayJoin>, ParserError> {
+        if !self.dialect.supports_array_join_syntax() {
+            return Ok(vec![]);
+        }
+
+        let mut array_joins = vec![];
+        loop {
+            let kind = if self.parse_keywords(&[Keyword::LEFT, Keyword::ARRAY, Keyword::JOIN]) {
+                ArrayJoinKind::Left
+            } else if self.parse_keywords(&[Keyword::INNER, Keyword::ARRAY, Keyword::JOIN]) {
+                ArrayJoinKind::Inner
+            } else if self.parse_keywords(&[Keyword::ARRAY, Keyword::JOIN]) {
+                ArrayJoinKind::Default
+            } else {
+                return Ok(array_joins);
+            };
+            let exprs = self.parse_comma_separated(Parser::parse_expr_with_alias)?;
+            array_joins.push(ArrayJoin { kind, exprs });
+        }
     }
 
     fn parse_joins(&mut self) -> Result<Vec<Join>, ParserError> {
         let mut joins = vec![];
         loop {
+            // `LEFT`/`INNER ARRAY JOIN` are not joins and are parsed separately;
+            // stop here rather than letting the `LEFT`/`INNER` arms consume the
+            // keyword and then fail on `ARRAY`.
+            if self.peek_array_join() {
+                break;
+            }
+
             let global = self.parse_keyword(Keyword::GLOBAL);
             let join = if self.parse_keyword(Keyword::CROSS) {
                 let join_operator = if self.parse_keyword(Keyword::JOIN) {
@@ -16308,33 +16355,6 @@ impl<'a> Parser<'a> {
                     relation,
                     global,
                     join_operator,
-                }
-            } else if self.dialect.supports_array_join_syntax()
-                && self.parse_keywords(&[Keyword::INNER, Keyword::ARRAY, Keyword::JOIN])
-            {
-                // ClickHouse: INNER ARRAY JOIN
-                Join {
-                    relation: self.parse_table_factor()?,
-                    global,
-                    join_operator: JoinOperator::InnerArrayJoin,
-                }
-            } else if self.dialect.supports_array_join_syntax()
-                && self.parse_keywords(&[Keyword::LEFT, Keyword::ARRAY, Keyword::JOIN])
-            {
-                // ClickHouse: LEFT ARRAY JOIN
-                Join {
-                    relation: self.parse_table_factor()?,
-                    global,
-                    join_operator: JoinOperator::LeftArrayJoin,
-                }
-            } else if self.dialect.supports_array_join_syntax()
-                && self.parse_keywords(&[Keyword::ARRAY, Keyword::JOIN])
-            {
-                // ClickHouse: ARRAY JOIN
-                Join {
-                    relation: self.parse_table_factor()?,
-                    global,
-                    join_operator: JoinOperator::ArrayJoin,
                 }
             } else {
                 let natural = self.parse_keyword(Keyword::NATURAL);
@@ -16452,7 +16472,11 @@ impl<'a> Parser<'a> {
                 {
                     let joins = self.parse_joins()?;
                     relation = TableFactor::NestedJoin {
-                        table_with_joins: Box::new(TableWithJoins { relation, joins }),
+                        table_with_joins: Box::new(TableWithJoins {
+                            relation,
+                            joins,
+                            array_joins: vec![],
+                        }),
                         alias: None,
                     };
                 }

@@ -473,6 +473,7 @@ fn parse_update_set_from() {
             table: TableWithJoins {
                 relation: table_from_name(ObjectName::from(vec![Ident::new("t1")])),
                 joins: vec![],
+                array_joins: vec![],
             },
             assignments: vec![Assignment {
                 target: AssignmentTarget::ColumnName(ObjectName::from(vec![Ident::new("name")])),
@@ -499,6 +500,7 @@ fn parse_update_set_from() {
                             from: vec![TableWithJoins {
                                 relation: table_from_name(ObjectName::from(vec![Ident::new("t1")])),
                                 joins: vec![],
+                                array_joins: vec![],
                             }],
                             lateral_views: vec![],
                             prewhere: None,
@@ -530,7 +532,8 @@ fn parse_update_set_from() {
                     alias: table_alias(true, "t2"),
                     sample: None,
                 },
-                joins: vec![]
+                joins: vec![],
+                array_joins: vec![],
             }])),
             selection: Some(Expr::BinaryOp {
                 left: Box::new(Expr::CompoundIdentifier(vec![
@@ -587,6 +590,7 @@ fn parse_update_with_table_alias() {
                         index_hints: vec![],
                     },
                     joins: vec![],
+                    array_joins: vec![],
                 },
                 table
             );
@@ -689,6 +693,7 @@ fn parse_select_with_table_alias() {
                 index_hints: vec![],
             },
             joins: vec![],
+            array_joins: vec![],
         }]
     );
 }
@@ -903,6 +908,7 @@ fn parse_where_delete_with_alias_statement() {
                         index_hints: vec![],
                     },
                     joins: vec![],
+                    array_joins: vec![],
                 }]),
                 using
             );
@@ -6029,6 +6035,7 @@ fn test_parse_named_window() {
                 span: Span::empty(),
             }])),
             joins: vec![],
+            array_joins: vec![],
         }],
         lateral_views: vec![],
         prewhere: None,
@@ -6741,6 +6748,7 @@ fn parse_interval_and_or_xor() {
                     span: Span::empty(),
                 }])),
                 joins: vec![],
+                array_joins: vec![],
             }],
             lateral_views: vec![],
             prewhere: None,
@@ -7191,6 +7199,7 @@ fn parse_unnest_in_from_clause() {
                 with_ordinality: false,
             },
             joins: vec![],
+            array_joins: vec![],
         }],
     );
     // 2. neither Alias nor WITH OFFSET clause.
@@ -7209,6 +7218,7 @@ fn parse_unnest_in_from_clause() {
                 with_ordinality: false,
             },
             joins: vec![],
+            array_joins: vec![],
         }],
     );
     // 3. Alias but no WITH OFFSET clause.
@@ -7227,6 +7237,7 @@ fn parse_unnest_in_from_clause() {
                 with_ordinality: false,
             },
             joins: vec![],
+            array_joins: vec![],
         }],
     );
     // 4. WITH OFFSET but no Alias.
@@ -7245,6 +7256,7 @@ fn parse_unnest_in_from_clause() {
                 with_ordinality: false,
             },
             joins: vec![],
+            array_joins: vec![],
         }],
     );
     // 5. Simple array
@@ -7270,6 +7282,7 @@ fn parse_unnest_in_from_clause() {
                 with_ordinality: false,
             },
             joins: vec![],
+            array_joins: vec![],
         }],
     );
     // 6. Multiple arrays
@@ -7301,6 +7314,7 @@ fn parse_unnest_in_from_clause() {
                 with_ordinality: false,
             },
             joins: vec![],
+            array_joins: vec![],
         }],
     )
 }
@@ -7413,10 +7427,12 @@ fn parse_implicit_join() {
             TableWithJoins {
                 relation: table_from_name(ObjectName::from(vec!["t1".into()])),
                 joins: vec![],
+                array_joins: vec![],
             },
             TableWithJoins {
                 relation: table_from_name(ObjectName::from(vec!["t2".into()])),
                 joins: vec![],
+                array_joins: vec![],
             },
         ],
         select.from,
@@ -7433,6 +7449,7 @@ fn parse_implicit_join() {
                     global: false,
                     join_operator: JoinOperator::Join(JoinConstraint::Natural),
                 }],
+                array_joins: vec![],
             },
             TableWithJoins {
                 relation: table_from_name(ObjectName::from(vec!["t2a".into()])),
@@ -7441,6 +7458,7 @@ fn parse_implicit_join() {
                     global: false,
                     join_operator: JoinOperator::Join(JoinConstraint::Natural),
                 }],
+                array_joins: vec![],
             },
         ],
         select.from,
@@ -7860,6 +7878,7 @@ fn parse_join_nesting() {
             table_with_joins: Box::new(TableWithJoins {
                 relation: table("a"),
                 joins: vec![join(table("b"))],
+                array_joins: vec![],
             }),
             alias: table_alias(true, "c"),
         }
@@ -8066,6 +8085,7 @@ fn parse_derived_tables() {
                     global: false,
                     join_operator: JoinOperator::Join(JoinConstraint::Natural),
                 }],
+                array_joins: vec![],
             }),
             alias: None,
         }
@@ -9181,6 +9201,7 @@ fn lateral_function() {
                 global: false,
                 join_operator: JoinOperator::Left(JoinConstraint::None),
             }],
+            array_joins: vec![],
         }],
         lateral_views: vec![],
         prewhere: None,
@@ -10194,6 +10215,7 @@ fn parse_merge() {
                                     Ident::new("foo")
                                 ])),
                                 joins: vec![],
+                                array_joins: vec![],
                             }],
                             lateral_views: vec![],
                             prewhere: None,
@@ -11949,6 +11971,7 @@ fn parse_select_table_with_index_hints() {
                 index_hints: vec![],
             },
             joins: vec![],
+            array_joins: vec![],
         }]
     );
 }
@@ -12669,6 +12692,7 @@ fn parse_unload() {
                     from: vec![TableWithJoins {
                         relation: table_from_name(ObjectName::from(vec![Ident::new("tab")])),
                         joins: vec![],
+                        array_joins: vec![],
                     }],
                     lateral_views: vec![],
                     prewhere: None,
@@ -12993,6 +13017,7 @@ fn parse_connect_by() {
             from: vec![TableWithJoins {
                 relation: table_from_name(ObjectName::from(vec![Ident::new("employees")])),
                 joins: vec![],
+                array_joins: vec![],
             }],
             into: None,
             lateral_views: vec![],
@@ -13060,6 +13085,7 @@ fn parse_connect_by() {
             from: vec![TableWithJoins {
                 relation: table_from_name(ObjectName::from(vec![Ident::new("employees")])),
                 joins: vec![],
+                array_joins: vec![],
             }],
             into: None,
             lateral_views: vec![],
@@ -13128,6 +13154,7 @@ fn parse_connect_by() {
             from: vec![TableWithJoins {
                 relation: table_from_name(ObjectName::from(vec![Ident::new("employees")])),
                 joins: vec![],
+                array_joins: vec![],
             }],
             into: None,
             lateral_views: vec![],
@@ -13215,6 +13242,7 @@ fn parse_connect_by() {
             from: vec![TableWithJoins {
                 relation: table_from_name(ObjectName::from(vec![Ident::new("t")])),
                 joins: vec![],
+                array_joins: vec![],
             }],
             into: None,
             lateral_views: vec![],
@@ -16423,6 +16451,7 @@ fn test_select_from_first() {
                         span: Span::empty(),
                     }])),
                     joins: vec![],
+                    array_joins: vec![],
                 }],
                 lateral_views: vec![],
                 prewhere: None,
@@ -16474,6 +16503,7 @@ fn test_select_from_first_with_cte() {
             span: Span::empty(),
         }])),
         joins: vec![],
+        array_joins: vec![],
     }];
 
     assert_eq!(ast_select.projection, expected_body_select_projection);
@@ -17574,7 +17604,8 @@ fn test_nested_join_without_parentheses() {
                                 Ident::new("customer_id".to_string())
                             ])),
                         })),
-                    }]
+                    }],
+                    array_joins: vec![],
                 }),
                 alias: None
             },
@@ -17641,7 +17672,8 @@ fn test_nested_join_without_parentheses() {
                                 Ident::new("customer_id".to_string())
                             ])),
                         })),
-                    }]
+                    }],
+                    array_joins: vec![],
                 }),
                 alias: None
             },
@@ -17708,7 +17740,8 @@ fn test_nested_join_without_parentheses() {
                                 Ident::new("customer_id".to_string())
                             ])),
                         })),
-                    }]
+                    }],
+                    array_joins: vec![],
                 }),
                 alias: None
             },
@@ -17775,7 +17808,8 @@ fn test_nested_join_without_parentheses() {
                                 Ident::new("customer_id".to_string())
                             ])),
                         })),
-                    }]
+                    }],
+                    array_joins: vec![],
                 }),
                 alias: None
             },
@@ -17844,7 +17878,8 @@ fn test_nested_join_without_parentheses() {
                                 ])),
                             }
                         )),
-                    }]
+                    }],
+                    array_joins: vec![],
                 }),
                 alias: None
             },

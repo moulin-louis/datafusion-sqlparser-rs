@@ -69,6 +69,7 @@ fn parse_map_access_expr() {
             from: vec![TableWithJoins {
                 relation: table_from_name(ObjectName::from(vec![Ident::new("foos")])),
                 joins: vec![],
+                array_joins: vec![],
             }],
             lateral_views: vec![],
             prewhere: None,
@@ -1791,61 +1792,112 @@ fn test_parse_not_null_in_column_options() {
     );
 }
 
-#[test]
-fn parse_array_join() {
-    // ARRAY JOIN works with both ClickHouseDialect and GenericDialect (roundtrip)
-    clickhouse_and_generic().verified_stmt("SELECT x FROM t ARRAY JOIN arr AS x");
-
-    // AST: join_operator is the unit variant ArrayJoin (no constraint)
-    match clickhouse_and_generic().verified_stmt("SELECT x FROM t ARRAY JOIN arr AS x") {
+/// Unwraps the single `ARRAY JOIN` clause of a query.
+fn array_join_of(dialects: TestedDialects, sql: &str) -> ArrayJoin {
+    match dialects.verified_stmt(sql) {
         Statement::Query(query) => {
-            let select = query.body.as_select().unwrap();
-            let join = &select.from[0].joins[0];
-            assert_eq!(join.join_operator, JoinOperator::ArrayJoin);
+            let from = &query.body.as_select().unwrap().from[0];
+            assert_eq!(from.array_joins.len(), 1);
+            from.array_joins[0].clone()
         }
         _ => unreachable!(),
     }
+}
 
-    // Combined: regular JOIN followed by ARRAY JOIN
+#[test]
+fn parse_array_join() {
+    let array_join = array_join_of(
+        clickhouse_and_generic(),
+        "SELECT x FROM t ARRAY JOIN arr AS x",
+    );
+    assert_eq!(array_join.kind, ArrayJoinKind::Default);
+    assert_eq!(
+        array_join.exprs,
+        vec![ExprWithAlias {
+            expr: Expr::Identifier(Ident::new("arr")),
+            alias: Some(Ident::new("x")),
+        }]
+    );
+
+    // The alias is optional.
+    let array_join = array_join_of(clickhouse_and_generic(), "SELECT arr FROM t ARRAY JOIN arr");
+    assert_eq!(
+        array_join.exprs,
+        vec![ExprWithAlias {
+            expr: Expr::Identifier(Ident::new("arr")),
+            alias: None,
+        }]
+    );
+
+    // Regular joins come first, then the ARRAY JOIN.
     clickhouse_and_generic()
         .verified_stmt("SELECT x FROM t JOIN u ON t.id = u.id ARRAY JOIN arr AS x");
 
-    // Negative: ARRAY JOIN with no table expression should fail
+    // ARRAY JOIN requires at least one expression.
     clickhouse_and_generic()
         .parse_sql_statements("SELECT x FROM t ARRAY JOIN")
-        .expect_err("ARRAY JOIN requires a table expression");
+        .expect_err("ARRAY JOIN requires an array expression");
+}
+
+#[test]
+fn parse_array_join_multiple_expressions() {
+    // The operands are a comma-separated list of arbitrary expressions, not
+    // relations. Checked on ClickHouse only: GenericDialect has no lambdas and
+    // parses `x -> x + 1` as a `->` binary operator.
+    // relations: array columns, function calls, lambdas and array literals.
+    let sql = concat!(
+        "SELECT s, num, mapped FROM t ",
+        "ARRAY JOIN arr AS a, arrayEnumerate(arr) AS num, arrayMap(x -> x + 1, arr) AS mapped"
+    );
+    let array_join = array_join_of(clickhouse(), sql);
+    assert_eq!(array_join.kind, ArrayJoinKind::Default);
+    assert_eq!(
+        array_join
+            .exprs
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>(),
+        vec![
+            "arr AS a",
+            "arrayEnumerate(arr) AS num",
+            "arrayMap(x -> x + 1, arr) AS mapped",
+        ]
+    );
+
+    clickhouse_and_generic().verified_stmt("SELECT a FROM t ARRAY JOIN [1, 2, 3] AS a");
 }
 
 #[test]
 fn parse_left_array_join() {
-    // LEFT ARRAY JOIN preserves rows with empty/null arrays (roundtrip)
-    clickhouse_and_generic().verified_stmt("SELECT x FROM t LEFT ARRAY JOIN arr AS x");
-
-    // AST: join_operator is LeftArrayJoin
-    match clickhouse_and_generic().verified_stmt("SELECT x FROM t LEFT ARRAY JOIN arr AS x") {
-        Statement::Query(query) => {
-            let select = query.body.as_select().unwrap();
-            let join = &select.from[0].joins[0];
-            assert_eq!(join.join_operator, JoinOperator::LeftArrayJoin);
-        }
-        _ => unreachable!(),
-    }
+    // LEFT ARRAY JOIN preserves rows with empty arrays.
+    let array_join = array_join_of(
+        clickhouse_and_generic(),
+        "SELECT x FROM t LEFT ARRAY JOIN arr AS x",
+    );
+    assert_eq!(array_join.kind, ArrayJoinKind::Left);
 }
 
 #[test]
 fn parse_inner_array_join() {
-    // INNER ARRAY JOIN filters rows with empty/null arrays (roundtrip)
-    clickhouse_and_generic().verified_stmt("SELECT x FROM t INNER ARRAY JOIN arr AS x");
+    // INNER ARRAY JOIN is an explicit spelling of the default behavior.
+    let array_join = array_join_of(
+        clickhouse_and_generic(),
+        "SELECT x FROM t INNER ARRAY JOIN arr AS x",
+    );
+    assert_eq!(array_join.kind, ArrayJoinKind::Inner);
+}
 
-    // AST: join_operator is InnerArrayJoin
-    match clickhouse_and_generic().verified_stmt("SELECT x FROM t INNER ARRAY JOIN arr AS x") {
-        Statement::Query(query) => {
-            let select = query.body.as_select().unwrap();
-            let join = &select.from[0].joins[0];
-            assert_eq!(join.join_operator, JoinOperator::InnerArrayJoin);
-        }
-        _ => unreachable!(),
-    }
+#[test]
+#[cfg(feature = "visitor")]
+fn visit_array_join_operand_is_not_a_relation() {
+    // An array column is not a table: walking relations must yield only `t`.
+    let stmt = clickhouse().verified_stmt("SELECT x FROM t ARRAY JOIN arr AS x");
+    let mut relations = vec![];
+    let _ = sqlparser::ast::visit_relations(&stmt, |name| {
+        relations.push(name.to_string());
+        core::ops::ControlFlow::<()>::Continue(())
+    });
+    assert_eq!(relations, ["t"]);
 }
 
 #[test]
@@ -1856,6 +1908,52 @@ fn parse_in_unparenthesized_expr() {
     // The branch must not fire when the next token is `(` (regressions).
     clickhouse().verified_expr("x IN (1, 2, 3)");
     clickhouse().verified_stmt("SELECT * FROM t WHERE x IN (SELECT y FROM u)");
+}
+
+#[test]
+fn parse_in_table() {
+    // A bare name on the right-hand side of `IN` is a table, not a value:
+    // `UserID IN users` reads the whole table. It must round-trip without gaining
+    // parentheses, and the table must be reachable as a relation.
+    let select = clickhouse().verified_only_select("SELECT * FROM t WHERE a IN users");
+    assert_eq!(
+        Expr::InTable {
+            expr: Box::new(Expr::Identifier(Ident::new("a"))),
+            table: ObjectName::from(vec![Ident::new("users")]),
+            negated: false,
+        },
+        select.selection.unwrap()
+    );
+
+    let select = clickhouse().verified_only_select("SELECT * FROM t WHERE a NOT IN dim.users");
+    assert_eq!(
+        Expr::InTable {
+            expr: Box::new(Expr::Identifier(Ident::new("a"))),
+            table: ObjectName::from(vec![Ident::new("dim"), Ident::new("users")]),
+            negated: true,
+        },
+        select.selection.unwrap()
+    );
+
+    // Everything else on the right-hand side stays an ordinary list.
+    clickhouse().expr_parses_to("x IN 'a'", "x IN ('a')");
+    clickhouse().expr_parses_to("x IN 1", "x IN (1)");
+    clickhouse().verified_expr("x IN (1, 2, 3)");
+    clickhouse().verified_stmt("SELECT * FROM t WHERE x IN (SELECT y FROM u)");
+}
+
+#[test]
+#[cfg(feature = "visitor")]
+fn visit_in_table_relation() {
+    // The point of the dedicated variant: the table read by `IN <table>` is
+    // reachable by consumers that walk relations, such as lineage extraction.
+    let stmt = clickhouse().verified_stmt("SELECT * FROM t WHERE a IN dim.users");
+    let mut relations = vec![];
+    let _ = sqlparser::ast::visit_relations(&stmt, |name| {
+        relations.push(name.to_string());
+        core::ops::ControlFlow::<()>::Continue(())
+    });
+    assert_eq!(relations, ["t", "dim.users"]);
 }
 
 #[test]

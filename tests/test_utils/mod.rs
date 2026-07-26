@@ -33,7 +33,8 @@ macro_rules! nest {
     ($base:expr $(, $join:expr)*) => {
         TableFactor::NestedJoin { table_with_joins: Box::new(TableWithJoins {
             relation: $base,
-            joins: vec![$(join($join)),*]
+            joins: vec![$(join($join)),*],
+            array_joins: vec![],
         }), alias: None}
     };
 }

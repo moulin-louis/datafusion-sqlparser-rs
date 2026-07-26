@@ -1271,6 +1271,8 @@ pub struct TableWithJoins {
     pub relation: TableFactor,
     /// The sequence of joins applied to the relation.
     pub joins: Vec<Join>,
+    /// ClickHouse `ARRAY JOIN` clauses, which follow the joins.
+    pub array_joins: Vec<ArrayJoin>,
 }
 
 impl fmt::Display for TableWithJoins {
@@ -1280,7 +1282,67 @@ impl fmt::Display for TableWithJoins {
             SpaceOrNewline.fmt(f)?;
             join.fmt(f)?;
         }
+        for array_join in &self.array_joins {
+            SpaceOrNewline.fmt(f)?;
+            array_join.fmt(f)?;
+        }
         Ok(())
+    }
+}
+
+/// A ClickHouse `ARRAY JOIN` clause: `[LEFT|INNER] ARRAY JOIN <expr> [AS <alias>], ...`
+///
+/// Despite the name this is not a join. It expands array-typed *expressions*
+/// into rows, the way `UNNEST` does, and its operands are arbitrary expressions
+/// rather than relations:
+///
+/// ```sql
+/// SELECT s, arr FROM t ARRAY JOIN arr
+/// SELECT s, num, mapped FROM t ARRAY JOIN arrayEnumerate(arr) AS num, arrayMap(x -> x + 1, arr) AS mapped
+/// SELECT a FROM t ARRAY JOIN [1, 2, 3] AS a
+/// ```
+///
+/// Modelling the operands as expressions rather than as a [`TableFactor`] keeps
+/// consumers that walk relations (such as [`crate::ast::visit_relations`]) from
+/// mistaking an array column for a table.
+///
+/// [ClickHouse docs](https://clickhouse.com/docs/sql-reference/statements/select/array-join)
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "visitor", derive(Visit, VisitMut))]
+pub struct ArrayJoin {
+    /// Whether the clause preserves or filters rows with empty arrays.
+    pub kind: ArrayJoinKind,
+    /// The array expressions to expand, each with an optional alias.
+    pub exprs: Vec<ExprWithAlias>,
+}
+
+impl fmt::Display for ArrayJoin {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} {}", self.kind, display_comma_separated(&self.exprs))
+    }
+}
+
+/// The row-preservation behavior of an [`ArrayJoin`].
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "visitor", derive(Visit, VisitMut))]
+pub enum ArrayJoinKind {
+    /// `ARRAY JOIN`: rows with an empty array are dropped.
+    Default,
+    /// `LEFT ARRAY JOIN`: rows with an empty array are kept, with a default value.
+    Left,
+    /// `INNER ARRAY JOIN`: an explicit spelling of the default behavior.
+    Inner,
+}
+
+impl fmt::Display for ArrayJoinKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ArrayJoinKind::Default => f.write_str("ARRAY JOIN"),
+            ArrayJoinKind::Left => f.write_str("LEFT ARRAY JOIN"),
+            ArrayJoinKind::Inner => f.write_str("INNER ARRAY JOIN"),
+        }
     }
 }
 
@@ -2855,13 +2917,6 @@ impl fmt::Display for Join {
                 self.relation,
                 suffix(constraint)
             )),
-            JoinOperator::ArrayJoin => f.write_fmt(format_args!("ARRAY JOIN {}", self.relation)),
-            JoinOperator::LeftArrayJoin => {
-                f.write_fmt(format_args!("LEFT ARRAY JOIN {}", self.relation))
-            }
-            JoinOperator::InnerArrayJoin => {
-                f.write_fmt(format_args!("INNER ARRAY JOIN {}", self.relation))
-            }
         }
     }
 }
@@ -2923,14 +2978,6 @@ pub enum JoinOperator {
     ///
     /// See <https://dev.mysql.com/doc/refman/8.4/en/join.html>.
     StraightJoin(JoinConstraint),
-    /// ClickHouse: `ARRAY JOIN` for unnesting arrays inline.
-    ///
-    /// See <https://clickhouse.com/docs/en/sql-reference/statements/select/array-join>.
-    ArrayJoin,
-    /// ClickHouse: `LEFT ARRAY JOIN` for unnesting arrays inline (preserves rows with empty arrays).
-    LeftArrayJoin,
-    /// ClickHouse: `INNER ARRAY JOIN` for unnesting arrays inline (filters rows with empty arrays).
-    InnerArrayJoin,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]

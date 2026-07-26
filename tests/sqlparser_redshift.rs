@@ -52,6 +52,7 @@ fn test_square_brackets_over_db_schema_table_name() {
                 }
             ])),
             joins: vec![],
+            array_joins: vec![],
         }
     );
 }
@@ -94,6 +95,7 @@ fn test_double_quotes_over_db_schema_table_name() {
                 }
             ])),
             joins: vec![],
+            array_joins: vec![],
         }
     );
 }

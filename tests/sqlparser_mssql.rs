@@ -77,7 +77,8 @@ fn parse_table_time_travel() {
                 sample: None,
                 index_hints: vec![]
             },
-            joins: vec![]
+            joins: vec![],
+            array_joins: vec![],
         },]
     );
 
@@ -523,7 +524,8 @@ fn parse_mssql_openjson() {
                 },
                 global: false,
                 join_operator: JoinOperator::CrossApply
-            }]
+            }],
+            array_joins: vec![],
         }],
         select.from
     );
@@ -577,7 +579,8 @@ fn parse_mssql_openjson() {
                 },
                 global: false,
                 join_operator: JoinOperator::CrossApply
-            }]
+            }],
+            array_joins: vec![],
         }],
         select.from
     );
@@ -631,7 +634,8 @@ fn parse_mssql_openjson() {
                 },
                 global: false,
                 join_operator: JoinOperator::CrossApply
-            }]
+            }],
+            array_joins: vec![],
         }],
         select.from
     );
@@ -665,7 +669,8 @@ fn parse_mssql_openjson() {
                 },
                 global: false,
                 join_operator: JoinOperator::CrossApply
-            }]
+            }],
+            array_joins: vec![],
         }],
         select.from
     );
@@ -699,7 +704,8 @@ fn parse_mssql_openjson() {
                 },
                 global: false,
                 join_operator: JoinOperator::CrossApply
-            }]
+            }],
+            array_joins: vec![],
         }],
         select.from
     );
@@ -1379,7 +1385,8 @@ fn parse_substring_in_select() {
                                 quote_style: None,
                                 span: Span::empty(),
                             }])),
-                            joins: vec![]
+                            joins: vec![],
+                            array_joins: vec![],
                         }],
                         lateral_views: vec![],
                         prewhere: None,
