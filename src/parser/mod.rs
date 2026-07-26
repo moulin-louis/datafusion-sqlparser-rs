@@ -373,6 +373,10 @@ pub struct Parser<'a> {
     /// `parse_table_factor`. See [`Parser::parse_table_factor`] for the 2^N
     /// pattern this guards.
     failed_derived_table_factor_positions: BTreeSet<usize>,
+    /// How many ternary conditionals are having their `then` branch parsed.
+    /// While this is non-zero, `:` ends that branch instead of acting as the
+    /// semi-structured access operator. See [`Parser::parse_ternary`].
+    ternary_then_depth: usize,
 }
 
 /// Copy marker for a [`ParserError`] cached by the `parse_prefix` failure
@@ -419,6 +423,7 @@ impl<'a> Parser<'a> {
             failed_prefix_positions: BTreeMap::new(),
             failed_reserved_word_prefix_positions: BTreeMap::new(),
             failed_derived_table_factor_positions: BTreeSet::new(),
+            ternary_then_depth: 0,
         }
     }
 
@@ -3832,6 +3837,30 @@ impl<'a> Parser<'a> {
         Ok(trailing_bracket)
     }
 
+    /// Parse the rest of a ternary conditional, `condition` already in hand:
+    /// `<condition> ? <then> : <else>`.
+    ///
+    /// Both branches take a full expression -- ClickHouse reads
+    /// `x ? a = b : c + 1` as `if(x, a = b, c + 1)` -- so the `then` branch is
+    /// parsed at the lowest precedence with `:` suppressed as an operator.
+    fn parse_ternary(&mut self, condition: Expr) -> Result<Expr, ParserError> {
+        self.expect_token(&Token::Question)?;
+
+        self.ternary_then_depth += 1;
+        let then_branch = self.parse_expr();
+        self.ternary_then_depth -= 1;
+        let then_branch = then_branch?;
+
+        self.expect_token(&Token::Colon)?;
+        let else_branch = self.parse_expr()?;
+
+        Ok(Expr::Ternary {
+            condition: Box::new(condition),
+            then_branch: Box::new(then_branch),
+            else_branch: Box::new(else_branch),
+        })
+    }
+
     /// Parse an operator following an expression
     pub fn parse_infix(&mut self, expr: Expr, precedence: u8) -> Result<Expr, ParserError> {
         // allow the dialect to override infix parsing
@@ -3840,6 +3869,10 @@ impl<'a> Parser<'a> {
         }
 
         let dialect = self.dialect;
+
+        if dialect.supports_ternary_operator() && self.peek_token_ref().token == Token::Question {
+            return self.parse_ternary(expr);
+        }
 
         self.advance_token();
         let tok = self.get_current_token();
@@ -4468,6 +4501,11 @@ impl<'a> Parser<'a> {
 
     /// Get the precedence of the next token
     pub fn get_next_precedence(&self) -> Result<u8, ParserError> {
+        // The `then` branch of a ternary is terminated by `:`, which would
+        // otherwise be read as the start of a semi-structured access.
+        if self.ternary_then_depth > 0 && self.peek_token_ref().token == Token::Colon {
+            return Ok(self.dialect.prec_unknown());
+        }
         self.dialect.get_next_precedence_default(self)
     }
 
@@ -13523,19 +13561,20 @@ impl<'a> Parser<'a> {
                         "Missing offset for LIMIT <offset>, <limit>".to_string(),
                     )
                 })?;
+                let limit = self.parse_expr()?;
+                // ClickHouse accepts `BY` after the comma form too, and
+                // normalizes `LIMIT <n> OFFSET <m> BY <expr>` into it.
+                let limit_by = self.parse_optional_limit_by()?;
                 return Ok(Some(LimitClause::OffsetCommaLimit {
                     offset,
-                    limit: self.parse_expr()?,
+                    limit,
+                    limit_by,
                 }));
             }
 
-            let limit_by = if self.dialect.supports_limit_by() && self.parse_keyword(Keyword::BY) {
-                Some(self.parse_comma_separated(Parser::parse_expr)?)
-            } else {
-                None
-            };
+            let limit_by = self.parse_optional_limit_by()?;
 
-            (Some(expr), limit_by)
+            (Some(expr), Some(limit_by))
         } else {
             (None, None)
         };
@@ -13544,7 +13583,17 @@ impl<'a> Parser<'a> {
             offset = Some(self.parse_offset()?);
         }
 
-        if offset.is_some() || (limit.is_some() && limit != Some(None)) || limit_by.is_some() {
+        // `LIMIT <n> OFFSET <m> BY <expr>`: ClickHouse puts `BY` last, so it is
+        // only reachable once the offset has been consumed.
+        let limit_by = match limit_by {
+            Some(limit_by) if limit_by.is_empty() => Some(self.parse_optional_limit_by()?),
+            limit_by => limit_by,
+        };
+
+        if offset.is_some()
+            || (limit.is_some() && limit != Some(None))
+            || limit_by.as_ref().is_some_and(|by| !by.is_empty())
+        {
             Ok(Some(LimitClause::LimitOffset {
                 limit: limit.unwrap_or_default(),
                 offset,
@@ -13552,6 +13601,18 @@ impl<'a> Parser<'a> {
             }))
         } else {
             Ok(None)
+        }
+    }
+
+    /// Parse an optional ClickHouse `BY <expr>, ...` following a `LIMIT`.
+    ///
+    /// Returns an empty list when the dialect lacks the feature or there is no
+    /// `BY`.
+    fn parse_optional_limit_by(&mut self) -> Result<Vec<Expr>, ParserError> {
+        if self.dialect.supports_limit_by() && self.parse_keyword(Keyword::BY) {
+            self.parse_comma_separated(Parser::parse_expr)
+        } else {
+            Ok(vec![])
         }
     }
 
@@ -16278,6 +16339,18 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse ClickHouse's optional `ANY`/`ALL` join strictness.
+    fn maybe_parse_join_strictness(&mut self) -> Option<JoinStrictness> {
+        if !self.dialect.supports_join_strictness() {
+            return None;
+        }
+        match self.parse_one_of_keywords(&[Keyword::ANY, Keyword::ALL]) {
+            Some(Keyword::ANY) => Some(JoinStrictness::Any),
+            Some(Keyword::ALL) => Some(JoinStrictness::All),
+            _ => None,
+        }
+    }
+
     fn parse_joins(&mut self) -> Result<Vec<Join>, ParserError> {
         let mut joins = vec![];
         loop {
@@ -16289,6 +16362,9 @@ impl<'a> Parser<'a> {
             }
 
             let global = self.parse_keyword(Keyword::GLOBAL);
+            // ClickHouse documents strictness before the join kind, but accepts
+            // it on either side, so the kind arms below look for it again.
+            let mut strictness = self.maybe_parse_join_strictness();
             let join = if self.parse_keyword(Keyword::CROSS) {
                 let join_operator = if self.parse_keyword(Keyword::JOIN) {
                     JoinOperator::CrossJoin(JoinConstraint::None)
@@ -16310,6 +16386,7 @@ impl<'a> Parser<'a> {
                 Join {
                     relation,
                     global,
+                    strictness,
                     join_operator,
                 }
             } else if self.parse_keyword(Keyword::OUTER) {
@@ -16318,6 +16395,7 @@ impl<'a> Parser<'a> {
                 Join {
                     relation: self.parse_table_factor()?,
                     global,
+                    strictness,
                     join_operator: JoinOperator::OuterApply,
                 }
             } else if self.parse_keyword(Keyword::ASOF) {
@@ -16354,6 +16432,7 @@ impl<'a> Parser<'a> {
                 Join {
                     relation,
                     global,
+                    strictness,
                     join_operator,
                 }
             } else {
@@ -16377,6 +16456,10 @@ impl<'a> Parser<'a> {
                     kw @ Keyword::LEFT | kw @ Keyword::RIGHT => {
                         let _ = self.next_token(); // consume LEFT/RIGHT
                         let is_left = kw == Keyword::LEFT;
+                        if strictness.is_none() {
+                            // `LEFT ANY JOIN` is `ANY LEFT JOIN`.
+                            strictness = self.maybe_parse_join_strictness();
+                        }
                         if is_left
                             && self.dialect.supports_asof_join_without_match_condition()
                             && self.parse_keyword(Keyword::ASOF)
@@ -16433,15 +16516,21 @@ impl<'a> Parser<'a> {
                             }
                         }
                     }
-                    Keyword::ANTI => {
-                        let _ = self.next_token(); // consume ANTI
+                    kw @ Keyword::ANTI | kw @ Keyword::SEMI => {
+                        let _ = self.next_token(); // consume ANTI/SEMI
+                        let is_anti = kw == Keyword::ANTI;
+                        // ClickHouse takes the kind on either side of the
+                        // strictness: `SEMI LEFT JOIN` is `LEFT SEMI JOIN`.
+                        let kind = self.parse_one_of_keywords(&[Keyword::LEFT, Keyword::RIGHT]);
                         self.expect_keyword_is(Keyword::JOIN)?;
-                        JoinOperator::Anti
-                    }
-                    Keyword::SEMI => {
-                        let _ = self.next_token(); // consume SEMI
-                        self.expect_keyword_is(Keyword::JOIN)?;
-                        JoinOperator::Semi
+                        match (kind, is_anti) {
+                            (Some(Keyword::LEFT), true) => JoinOperator::LeftAnti,
+                            (Some(Keyword::LEFT), false) => JoinOperator::LeftSemi,
+                            (Some(Keyword::RIGHT), true) => JoinOperator::RightAnti,
+                            (Some(Keyword::RIGHT), false) => JoinOperator::RightSemi,
+                            (_, true) => JoinOperator::Anti,
+                            (_, false) => JoinOperator::Semi,
+                        }
                     }
                     Keyword::FULL => {
                         let _ = self.next_token(); // consume FULL
@@ -16485,6 +16574,7 @@ impl<'a> Parser<'a> {
                 Join {
                     relation,
                     global,
+                    strictness,
                     join_operator: join_operator_type(join_constraint),
                 }
             };
@@ -16702,6 +16792,7 @@ impl<'a> Parser<'a> {
                 }),
                 alias,
                 sample: None,
+                has_final: false,
             })
         } else if dialect_of!(self is BigQueryDialect | PostgreSqlDialect | GenericDialect)
             && self.parse_keyword(Keyword::UNNEST)
@@ -16825,6 +16916,11 @@ impl<'a> Parser<'a> {
                 }
             };
 
+            // ClickHouse orders these `<name> [AS <alias>] FINAL [SAMPLE ...]`,
+            // so the modifier follows the alias but precedes the sample.
+            let has_final =
+                self.dialect.supports_table_final() && self.parse_keyword(Keyword::FINAL);
+
             if !self.dialect.supports_table_sample_before_alias() {
                 if let Some(parsed_sample) = self.maybe_parse_table_sample()? {
                     sample = Some(TableSampleKind::AfterTableAlias(parsed_sample));
@@ -16842,6 +16938,7 @@ impl<'a> Parser<'a> {
                 json_path,
                 sample,
                 index_hints,
+                has_final,
             };
 
             while let Some(kw) = self.parse_one_of_keywords(&[Keyword::PIVOT, Keyword::UNPIVOT]) {
@@ -16892,6 +16989,7 @@ impl<'a> Parser<'a> {
             json_path: None,
             sample: None,
             index_hints: vec![],
+            has_final: false,
         })
     }
 
@@ -17571,6 +17669,10 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::RParen)?;
         let alias = self.maybe_parse_table_alias()?;
 
+        // ClickHouse orders these `(<subquery>) [AS <alias>] FINAL [SAMPLE ...]`,
+        // the same as for a named table.
+        let has_final = self.dialect.supports_table_final() && self.parse_keyword(Keyword::FINAL);
+
         // Parse optional SAMPLE clause after alias
         let sample = self
             .maybe_parse_table_sample()?
@@ -17584,6 +17686,7 @@ impl<'a> Parser<'a> {
             subquery,
             alias,
             sample,
+            has_final,
         })
     }
 
@@ -18984,6 +19087,26 @@ impl<'a> Parser<'a> {
             return Ok(TableFunctionArgs {
                 args: vec![],
                 settings: None,
+                subquery: None,
+            });
+        }
+        // `view(SELECT ...)` takes a query where an expression would go, and
+        // rejects the same query in parentheses.
+        if self.dialect.supports_table_function_subquery()
+            && matches!(
+                self.peek_token_ref().token,
+                Token::Word(Word {
+                    keyword: Keyword::SELECT | Keyword::WITH,
+                    ..
+                })
+            )
+        {
+            let subquery = self.parse_query()?;
+            self.expect_token(&Token::RParen)?;
+            return Ok(TableFunctionArgs {
+                args: vec![],
+                settings: None,
+                subquery: Some(subquery),
             });
         }
         let mut args = vec![];
@@ -18997,7 +19120,11 @@ impl<'a> Parser<'a> {
             }
         };
         self.expect_token(&Token::RParen)?;
-        Ok(TableFunctionArgs { args, settings })
+        Ok(TableFunctionArgs {
+            args,
+            settings,
+            subquery: None,
+        })
     }
 
     /// Parses a potentially empty list of arguments to a function
@@ -19247,6 +19374,12 @@ impl<'a> Parser<'a> {
             None
         };
 
+        let opt_apply = if self.dialect.supports_select_wildcard_apply() {
+            self.parse_select_item_applies()?
+        } else {
+            vec![]
+        };
+
         Ok(WildcardAdditionalOptions {
             wildcard_token: wildcard_token.into(),
             opt_ilike,
@@ -19255,6 +19388,7 @@ impl<'a> Parser<'a> {
             opt_rename,
             opt_replace,
             opt_alias,
+            opt_apply,
         })
     }
 
@@ -19298,6 +19432,30 @@ impl<'a> Parser<'a> {
         };
 
         Ok(opt_exclude)
+    }
+
+    /// Parse the [`APPLY`](ApplySelectItem) transformers of a wildcard select
+    /// item. They chain, so `* APPLY(sum) APPLY(toString)` sums each column and
+    /// then stringifies each sum.
+    ///
+    /// Returns an empty list when there are none.
+    fn parse_select_item_applies(&mut self) -> Result<Vec<ApplySelectItem>, ParserError> {
+        let mut applies = vec![];
+        while self.parse_keyword(Keyword::APPLY) {
+            // `APPLY(sum)` and `APPLY sum` mean the same thing. The parentheses
+            // are ambiguous with a call taking no arguments, so they are only
+            // consumed as a wrapper when what follows is not itself a call.
+            let parenthesized = self.consume_token(&Token::LParen);
+            let expr = self.parse_expr()?;
+            if parenthesized {
+                self.expect_token(&Token::RParen)?;
+            }
+            applies.push(ApplySelectItem {
+                expr,
+                parenthesized,
+            });
+        }
+        Ok(applies)
     }
 
     /// Parse an [`Except`](ExceptSelectItem) information for wildcard select items.

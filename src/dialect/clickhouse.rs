@@ -16,6 +16,8 @@
 // under the License.
 
 use crate::dialect::Dialect;
+use crate::keywords::{self, Keyword};
+use crate::parser::Parser;
 
 /// A [`Dialect`] for [ClickHouse](https://clickhouse.com/).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -88,6 +90,35 @@ impl Dialect for ClickHouseDialect {
 
     fn supports_asof_join_without_match_condition(&self) -> bool {
         true
+    }
+
+    fn supports_table_final(&self) -> bool {
+        true
+    }
+
+    fn supports_select_wildcard_apply(&self) -> bool {
+        true
+    }
+
+    fn supports_join_strictness(&self) -> bool {
+        true
+    }
+
+    fn supports_table_function_subquery(&self) -> bool {
+        true
+    }
+
+    fn supports_ternary_operator(&self) -> bool {
+        true
+    }
+
+    fn is_table_alias(&self, kw: &Keyword, _parser: &mut Parser) -> bool {
+        // None of these can be an implicit alias, or the modifier they
+        // introduce would be swallowed by the preceding table: `FROM tbl FINAL`
+        // is the read-time merge modifier, and `FROM t ANY LEFT JOIN u` states
+        // the strictness of the join. Spelled with `AS` they are still aliases.
+        !matches!(kw, Keyword::FINAL | Keyword::ANY | Keyword::ALL)
+            && !keywords::RESERVED_FOR_TABLE_ALIAS.contains(kw)
     }
 
     // ClickHouse uses this for some FORMAT expressions in `INSERT` context, e.g. when inserting

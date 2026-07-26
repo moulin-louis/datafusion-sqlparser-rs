@@ -1887,6 +1887,12 @@ impl<'a> Tokenizer<'a> {
                         _ => Ok(Some(Token::Question)),
                     }
                 }
+                // ClickHouse spells its conditional `cond ? a : b`, so `?` is an
+                // operator there rather than the start of a bind parameter.
+                '?' if self.dialect.supports_ternary_operator() => {
+                    chars.next();
+                    Ok(Some(Token::Question))
+                }
                 '?' => {
                     chars.next();
                     let s = peeking_take_while(chars, |ch| ch.is_numeric());

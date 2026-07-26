@@ -1757,6 +1757,7 @@ fn parse_table_time_travel() {
                 json_path: None,
                 sample: None,
                 index_hints: vec![],
+                has_final: false,
             },
             joins: vec![],
             array_joins: vec![],
@@ -1793,6 +1794,7 @@ fn parse_join_constraint_unnest_alias() {
                 op: BinaryOperator::Eq,
                 right: Box::new(Expr::Identifier("c2".into())),
             })),
+            strictness: None,
         }]
     );
 }
@@ -1868,6 +1870,7 @@ fn parse_merge() {
                     json_path: None,
                     sample: None,
                     index_hints: vec![],
+                    has_final: false,
                 },
                 table
             );
@@ -1883,6 +1886,7 @@ fn parse_merge() {
                     json_path: None,
                     sample: None,
                     index_hints: vec![],
+                    has_final: false,
                 },
                 source
             );

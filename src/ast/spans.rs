@@ -153,7 +153,15 @@ impl Spanned for LimitClause {
                     .chain(offset.as_ref().map(|i| i.span()))
                     .chain(limit_by.iter().map(|i| i.span())),
             ),
-            LimitClause::OffsetCommaLimit { offset, limit } => offset.span().union(&limit.span()),
+            LimitClause::OffsetCommaLimit {
+                offset,
+                limit,
+                limit_by,
+            } => union_spans(
+                [offset.span(), limit.span()]
+                    .into_iter()
+                    .chain(limit_by.iter().map(|e| e.span())),
+            ),
         }
     }
 }
@@ -1545,6 +1553,15 @@ impl Spanned for Expr {
                 high,
             } => expr.span().union(&low.span()).union(&high.span()),
 
+            Expr::Ternary {
+                condition,
+                then_branch,
+                else_branch,
+            } => condition
+                .span()
+                .union(&then_branch.span())
+                .union(&else_branch.span()),
+
             Expr::BinaryOp { left, op: _, right } => left.span().union(&right.span()),
             Expr::Like {
                 negated: _,
@@ -1903,6 +1920,7 @@ impl Spanned for WildcardAdditionalOptions {
             opt_replace,
             opt_rename,
             opt_alias,
+            opt_apply,
         } = self;
 
         union_spans(
@@ -1912,7 +1930,8 @@ impl Spanned for WildcardAdditionalOptions {
                 .chain(opt_rename.as_ref().map(|i| i.span()))
                 .chain(opt_replace.as_ref().map(|i| i.span()))
                 .chain(opt_except.as_ref().map(|i| i.span()))
-                .chain(opt_alias.as_ref().map(|i| i.span)),
+                .chain(opt_alias.as_ref().map(|i| i.span))
+                .chain(opt_apply.iter().map(|i| i.expr.span())),
         )
     }
 }
@@ -1995,6 +2014,7 @@ impl Spanned for TableFactor {
                 json_path: _,
                 sample: _,
                 index_hints: _,
+                has_final: _,
             } => union_spans(
                 name.0
                     .iter()
@@ -2011,6 +2031,7 @@ impl Spanned for TableFactor {
                 subquery,
                 alias,
                 sample: _,
+                has_final: _,
             } => subquery
                 .span()
                 .union_opt(&alias.as_ref().map(|alias| alias.span())),
@@ -2257,7 +2278,8 @@ impl Spanned for Join {
     fn span(&self) -> Span {
         let Join {
             relation,
-            global: _, // bool
+            global: _,     // bool
+            strictness: _, // keyword only
             join_operator,
         } = self;
 

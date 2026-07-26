@@ -1032,6 +1032,55 @@ fn parse_limit_by() {
 }
 
 #[test]
+fn parse_limit_by_with_offset() {
+    // `BY` comes last, after either spelling of the offset. ClickHouse reads
+    // both of these as `LIMIT 1, 2 BY a`.
+    clickhouse_and_generic().verified_stmt("SELECT a FROM t LIMIT 1, 2 BY a");
+    clickhouse_and_generic().verified_stmt("SELECT a FROM t LIMIT 2 OFFSET 1 BY a");
+    clickhouse_and_generic().verified_stmt("SELECT a FROM t LIMIT 1, 2 BY a, b");
+
+    match clickhouse_and_generic()
+        .verified_query("SELECT a FROM t LIMIT 1, 2 BY a")
+        .limit_clause
+    {
+        Some(LimitClause::OffsetCommaLimit {
+            offset,
+            limit,
+            limit_by,
+        }) => {
+            assert_eq!(offset.to_string(), "1");
+            assert_eq!(limit.to_string(), "2");
+            assert_eq!(limit_by.len(), 1);
+            assert_eq!(limit_by[0].to_string(), "a");
+        }
+        other => panic!("expected LIMIT <offset>, <limit> BY, got {other:?}"),
+    }
+
+    match clickhouse_and_generic()
+        .verified_query("SELECT a FROM t LIMIT 2 OFFSET 1 BY a")
+        .limit_clause
+    {
+        Some(LimitClause::LimitOffset {
+            limit,
+            offset,
+            limit_by,
+        }) => {
+            assert_eq!(limit.map(|l| l.to_string()).as_deref(), Some("2"));
+            assert_eq!(offset.map(|o| o.to_string()).as_deref(), Some("OFFSET 1"));
+            assert_eq!(limit_by[0].to_string(), "a");
+        }
+        other => panic!("expected LIMIT ... OFFSET ... BY, got {other:?}"),
+    }
+
+    // ClickHouse requires `BY` after the offset. This has always accepted the
+    // other order as well, and renders it back in the accepted one.
+    clickhouse_and_generic().one_statement_parses_to(
+        "SELECT a FROM t LIMIT 2 BY a OFFSET 1",
+        "SELECT a FROM t LIMIT 2 OFFSET 1 BY a",
+    );
+}
+
+#[test]
 fn parse_settings_in_query() {
     fn check_settings(sql: &str, expected: Vec<Setting>) {
         match clickhouse_and_generic().verified_stmt(sql) {
@@ -1690,6 +1739,7 @@ fn parse_select_table_function_settings() {
                     value: Expr::value(single_quoted_string("s")),
                 },
             ]),
+            subquery: None,
         },
     );
     check_settings(
@@ -1699,6 +1749,7 @@ fn parse_select_table_function_settings() {
                 Expr::Identifier("arg".into()),
             ))],
             settings: None,
+            subquery: None,
         },
     );
     check_settings(
@@ -1715,6 +1766,7 @@ fn parse_select_table_function_settings() {
                     value: Expr::value(single_quoted_string("s")),
                 },
             ]),
+            subquery: None,
         },
     );
     let invalid_cases = vec![
@@ -2308,6 +2360,319 @@ fn parse_positional_tuple_access() {
         .is_err());
     assert!(TestedDialects::new(vec![Box::new(MySqlDialect {})])
         .parse_sql_statements("SELECT t.2 FROM t")
+        .is_err());
+}
+
+#[test]
+fn parse_table_final() {
+    // `FINAL` merges rows at read time. Without it, `FROM tbl FINAL` parses as
+    // a table aliased `FINAL`, which round-trips to `FROM tbl AS FINAL` and
+    // silently drops the merge.
+    for sql in [
+        "SELECT * FROM tbl FINAL",
+        "SELECT * FROM db.tbl FINAL",
+        "SELECT * FROM tbl AS t FINAL",
+        "SELECT * FROM a FINAL JOIN b FINAL ON a.id = b.id",
+        "SELECT count() FROM tbl FINAL WHERE x > 0",
+    ] {
+        clickhouse_and_generic().verified_stmt(sql);
+    }
+
+    let from = clickhouse_and_generic()
+        .verified_only_select("SELECT * FROM tbl AS t FINAL")
+        .from
+        .clone();
+    match &from[..] {
+        [TableWithJoins {
+            relation: TableFactor::Table {
+                alias, has_final, ..
+            },
+            ..
+        }] => {
+            assert!(has_final);
+            assert_eq!(alias.as_ref().map(|a| a.name.value.as_str()), Some("t"));
+        }
+        other => panic!("expected a single table factor, got {other:?}"),
+    }
+
+    // ClickHouse rejects the modifier before the alias, and so does this.
+    assert!(clickhouse()
+        .parse_sql_statements("SELECT * FROM tbl FINAL AS t")
+        .is_err());
+
+    // The order is `<name> [AS <alias>] FINAL [SAMPLE ...]`. Found by running
+    // ClickHouse's own test corpus: `FINAL SAMPLE 1 / 2` is all over it, and
+    // parsing `FINAL` after the sample rejected every one of them.
+    clickhouse_and_generic().verified_stmt("SELECT count() FROM tbl FINAL SAMPLE 1 / 2");
+    clickhouse_and_generic().verified_stmt("SELECT count() FROM tbl AS t FINAL SAMPLE 1 / 2");
+    assert!(clickhouse()
+        .parse_sql_statements("SELECT count() FROM tbl SAMPLE 1 / 2 FINAL")
+        .is_err());
+
+    // ClickHouse's parser takes `FINAL` after any table expression, including a
+    // derived table, and rejects it later during analysis.
+    clickhouse_and_generic().verified_stmt("SELECT * FROM (SELECT 1) FINAL");
+    clickhouse_and_generic().verified_stmt("SELECT * FROM (SELECT 1) AS t FINAL SAMPLE 1 / 2");
+    clickhouse_and_generic().verified_stmt("WITH c AS (SELECT 1) SELECT * FROM c FINAL");
+
+    match &clickhouse_and_generic()
+        .verified_only_select("SELECT * FROM (SELECT 1) FINAL")
+        .from[0]
+        .relation
+    {
+        TableFactor::Derived { has_final, .. } => assert!(has_final),
+        other => panic!("expected a derived table, got {other:?}"),
+    }
+
+    // A dialect without the feature keeps reading `FINAL` as an implicit alias.
+    let postgres = TestedDialects::new(vec![Box::new(PostgreSqlDialect {})]);
+    let select = postgres.verified_only_select("SELECT * FROM tbl AS FINAL");
+    match &select.from[..] {
+        [TableWithJoins {
+            relation: TableFactor::Table {
+                alias, has_final, ..
+            },
+            ..
+        }] => {
+            assert!(!has_final);
+            assert_eq!(alias.as_ref().map(|a| a.name.value.as_str()), Some("FINAL"));
+        }
+        other => panic!("expected a single table factor, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_ternary_operator() {
+    // `<condition> ? <then> : <else>`, ClickHouse's spelling of `if(...)`.
+    // Groupings below were read off `EXPLAIN SYNTAX` on ClickHouse 26.7.1.
+    for sql in [
+        "SELECT a ? b : c",
+        "SELECT a ? b : c FROM t",
+        "SELECT 1 = 1 ? 2 : 3",
+        "SELECT 1 ? (2) : (3 ? 4 : 5)",
+        "SELECT * FROM t WHERE flag ? x : y",
+    ] {
+        clickhouse().verified_stmt(sql);
+    }
+
+    let ternary = |sql: &str| match clickhouse().verified_expr(sql) {
+        Expr::Ternary {
+            condition,
+            then_branch,
+            else_branch,
+        } => (*condition, *then_branch, *else_branch),
+        other => panic!("expected a ternary, got {other:?}"),
+    };
+
+    // The condition binds looser than every binary operator: ClickHouse reads
+    // `1 OR 0 ? 2 : 3` as `if(or(1, 0), 2, 3)`, not `1 OR if(0, 2, 3)`.
+    let (condition, _, _) = ternary("1 OR 0 ? 2 : 3");
+    assert_eq!(condition.to_string(), "1 OR 0");
+    let (condition, _, _) = ternary("0 AND 1 ? 2 : 3");
+    assert_eq!(condition.to_string(), "0 AND 1");
+    let (condition, _, _) = ternary("1 = 1 ? 2 : 3");
+    assert_eq!(condition.to_string(), "1 = 1");
+
+    // Both branches take a full expression.
+    let (_, then_branch, else_branch) = ternary("1 ? 2 AND 3 : 4 + 10");
+    assert_eq!(then_branch.to_string(), "2 AND 3");
+    assert_eq!(else_branch.to_string(), "4 + 10");
+
+    // `:` ends the `then` branch rather than starting a member access.
+    let (_, then_branch, _) = ternary("1 ? 2 = 2 : 4");
+    assert_eq!(then_branch.to_string(), "2 = 2");
+
+    // ClickHouse rejects an unparenthesized ternary inside another one; this
+    // accepts it, grouping as C does. Parsing more than the server accepts is
+    // harmless, and the alternative -- tracking parenthesis depth to allow
+    // `1 ? (2) : (3 ? 4 : 5)` while rejecting this -- buys nothing.
+    let (_, then_branch, else_branch) = ternary("1 ? 2 ? 3 : 4 : 5");
+    assert_eq!(then_branch.to_string(), "2 ? 3 : 4");
+    assert_eq!(else_branch.to_string(), "5");
+    let (_, _, else_branch) = ternary("1 ? 2 : 3 ? 4 : 5");
+    assert_eq!(else_branch.to_string(), "3 ? 4 : 5");
+
+    // `?` is the operator here, never a bind parameter -- ClickHouse rejects
+    // `= ?` too. Dialects without the feature keep their placeholder.
+    assert!(clickhouse()
+        .parse_sql_statements("SELECT * FROM t WHERE id = ?")
+        .is_err());
+    let generic = TestedDialects::new(vec![Box::new(GenericDialect {})]);
+    generic.verified_stmt("SELECT * FROM t WHERE id = ?");
+}
+
+#[test]
+fn parse_select_wildcard_apply() {
+    // `APPLY` calls a function on every column the wildcard expands to.
+    for sql in [
+        "SELECT * APPLY(sum) FROM t",
+        "SELECT * APPLY(quantile(0.5)) FROM t",
+        "SELECT t.* APPLY(sum) FROM t",
+        // Transformers chain, applied left to right.
+        "SELECT * APPLY(sum) APPLY(toString) FROM t",
+        "SELECT * EXCEPT (b) APPLY(sum) FROM t",
+    ] {
+        clickhouse_and_generic().verified_stmt(sql);
+    }
+
+    // ClickHouse accepts the transformer without parentheses, and this keeps
+    // whichever spelling was written.
+    clickhouse_and_generic().verified_stmt("SELECT * APPLY sum FROM t");
+
+    // A lambda is a transformer too. Checked on ClickHouse only: GenericDialect
+    // has no lambdas and reads `x -> x + 1` as a `->` binary operator.
+    clickhouse().verified_stmt("SELECT * APPLY(x -> x + 1) FROM t");
+
+    let applies = |sql: &str| match clickhouse_and_generic()
+        .verified_only_select(sql)
+        .projection
+        .first()
+        .cloned()
+    {
+        Some(SelectItem::Wildcard(options)) => options.opt_apply,
+        other => panic!("expected a wildcard, got {other:?}"),
+    };
+
+    let apply = applies("SELECT * APPLY(sum) FROM t");
+    assert_eq!(apply.len(), 1);
+    assert_eq!(apply[0].expr.to_string(), "sum");
+    assert!(apply[0].parenthesized);
+
+    let apply = applies("SELECT * APPLY sum FROM t");
+    assert!(!apply[0].parenthesized);
+
+    let apply = applies("SELECT * APPLY(sum) APPLY(toString) FROM t");
+    assert_eq!(
+        apply.iter().map(|a| a.expr.to_string()).collect::<Vec<_>>(),
+        ["sum", "toString"]
+    );
+
+    // A dialect without the feature leaves `APPLY` alone.
+    assert!(TestedDialects::new(vec![Box::new(PostgreSqlDialect {})])
+        .parse_sql_statements("SELECT * APPLY(sum) FROM t")
+        .is_err());
+}
+
+#[test]
+fn parse_join_strictness() {
+    // ClickHouse takes the strictness on either side of the join kind. All of
+    // the pairings below were checked against ClickHouse 26.7.1.
+    for sql in [
+        "SELECT * FROM t ANY JOIN u USING(a)",
+        "SELECT * FROM t ALL JOIN u USING(a)",
+        "SELECT * FROM t ANY LEFT JOIN u USING(a)",
+        "SELECT * FROM t ALL LEFT JOIN u USING(a)",
+        "SELECT * FROM t ANY RIGHT JOIN u USING(a)",
+        "SELECT * FROM t ANY INNER JOIN u USING(a)",
+        "SELECT * FROM t GLOBAL ANY LEFT JOIN u USING(a)",
+        "SELECT * FROM t LEFT SEMI JOIN u USING(a)",
+        "SELECT * FROM t RIGHT ANTI JOIN u USING(a)",
+        "SELECT * FROM t SEMI JOIN u USING(a)",
+    ] {
+        clickhouse_and_generic().verified_stmt(sql);
+    }
+
+    // The kind may come first; ClickHouse's own order is strictness first, so
+    // that is what gets rendered back.
+    for (written, rendered) in [
+        (
+            "SELECT * FROM t LEFT ANY JOIN u USING(a)",
+            "SELECT * FROM t ANY LEFT JOIN u USING(a)",
+        ),
+        (
+            "SELECT * FROM t LEFT ALL JOIN u USING(a)",
+            "SELECT * FROM t ALL LEFT JOIN u USING(a)",
+        ),
+        (
+            "SELECT * FROM t SEMI LEFT JOIN u USING(a)",
+            "SELECT * FROM t LEFT SEMI JOIN u USING(a)",
+        ),
+        (
+            "SELECT * FROM t ANTI RIGHT JOIN u USING(a)",
+            "SELECT * FROM t RIGHT ANTI JOIN u USING(a)",
+        ),
+    ] {
+        clickhouse_and_generic().one_statement_parses_to(written, rendered);
+    }
+
+    let join =
+        |sql: &str| clickhouse_and_generic().verified_only_select(sql).from[0].joins[0].clone();
+
+    // Without this, `ANY` was swallowed as an implicit alias of the left table
+    // and the join silently became a plain `LEFT JOIN`.
+    let any_left = join("SELECT * FROM t ANY LEFT JOIN u USING(a)");
+    assert_eq!(any_left.strictness, Some(JoinStrictness::Any));
+    assert!(matches!(any_left.join_operator, JoinOperator::Left(_)));
+
+    let all_left = join("SELECT * FROM t ALL LEFT JOIN u USING(a)");
+    assert_eq!(all_left.strictness, Some(JoinStrictness::All));
+
+    let plain = join("SELECT * FROM t LEFT JOIN u USING(a)");
+    assert_eq!(plain.strictness, None);
+
+    // `SEMI`/`ANTI` stay in the operator, so strictness is free for `ANY`/`ALL`.
+    let semi = join("SELECT * FROM t LEFT SEMI JOIN u USING(a)");
+    assert_eq!(semi.strictness, None);
+    assert!(matches!(semi.join_operator, JoinOperator::LeftSemi(_)));
+
+    // A dialect without the feature keeps reading `ANY` as an alias.
+    let postgres = TestedDialects::new(vec![Box::new(PostgreSqlDialect {})]);
+    let select = postgres.verified_only_select("SELECT * FROM t AS ANY LEFT JOIN u USING(a)");
+    assert_eq!(select.from[0].joins[0].strictness, None);
+}
+
+#[test]
+fn parse_view_table_function() {
+    // `view(SELECT ...)` turns a query into a table. The subquery carries no
+    // parentheses of its own -- ClickHouse rejects `view((SELECT 1))`.
+    for sql in [
+        "SELECT * FROM view(SELECT 1 AS x)",
+        "SELECT * FROM view(SELECT a FROM t WHERE b > 1)",
+        "SELECT * FROM view(WITH c AS (SELECT 1) SELECT * FROM c)",
+        "SELECT * FROM view(SELECT a FROM t) AS v",
+    ] {
+        clickhouse_and_generic().verified_stmt(sql);
+    }
+
+    let select =
+        clickhouse_and_generic().verified_only_select("SELECT * FROM view(SELECT a FROM t)");
+    match &select.from[0].relation {
+        TableFactor::Table {
+            name,
+            args: Some(args),
+            ..
+        } => {
+            assert_eq!(name.to_string(), "view");
+            assert!(args.args.is_empty());
+            assert_eq!(
+                args.subquery.as_ref().map(|q| q.to_string()),
+                Some("SELECT a FROM t".to_string())
+            );
+        }
+        other => panic!("expected a table function, got {other:?}"),
+    }
+
+    // The tables the subquery reads are reachable, which is the point: a
+    // visitor collecting relations sees `t`.
+    #[cfg(feature = "visitor")]
+    {
+        use sqlparser::ast::{visit_relations, Statement};
+        use std::ops::ControlFlow;
+
+        let statements: Vec<Statement> = clickhouse()
+            .parse_sql_statements("SELECT * FROM view(SELECT a FROM t)")
+            .unwrap();
+        let mut relations = vec![];
+        let _ = visit_relations(&statements, |name| {
+            relations.push(name.to_string());
+            ControlFlow::<()>::Continue(())
+        });
+        assert!(relations.iter().any(|r| r == "t"), "got {relations:?}");
+    }
+
+    // A dialect without the feature keeps rejecting a query in that position.
+    assert!(TestedDialects::new(vec![Box::new(PostgreSqlDialect {})])
+        .parse_sql_statements("SELECT * FROM view(SELECT 1)")
         .is_err());
 }
 

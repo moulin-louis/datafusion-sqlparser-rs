@@ -75,7 +75,8 @@ fn parse_table_time_travel() {
                 with_ordinality: false,
                 json_path: None,
                 sample: None,
-                index_hints: vec![]
+                index_hints: vec![],
+                has_final: false,
             },
             joins: vec![],
             array_joins: vec![],
@@ -491,7 +492,8 @@ fn parse_mssql_openjson() {
                 partitions: vec![],
                 json_path: None,
                 sample: None,
-                index_hints: vec![]
+                index_hints: vec![],
+                has_final: false,
             },
             joins: vec![Join {
                 relation: TableFactor::OpenJsonTable {
@@ -523,7 +525,8 @@ fn parse_mssql_openjson() {
                     alias: table_alias(true, "B")
                 },
                 global: false,
-                join_operator: JoinOperator::CrossApply
+                join_operator: JoinOperator::CrossApply,
+                strictness: None,
             }],
             array_joins: vec![],
         }],
@@ -546,7 +549,8 @@ fn parse_mssql_openjson() {
                 partitions: vec![],
                 json_path: None,
                 sample: None,
-                index_hints: vec![]
+                index_hints: vec![],
+                has_final: false,
             },
             joins: vec![Join {
                 relation: TableFactor::OpenJsonTable {
@@ -578,7 +582,8 @@ fn parse_mssql_openjson() {
                     alias: table_alias(true, "B")
                 },
                 global: false,
-                join_operator: JoinOperator::CrossApply
+                join_operator: JoinOperator::CrossApply,
+                strictness: None,
             }],
             array_joins: vec![],
         }],
@@ -601,7 +606,8 @@ fn parse_mssql_openjson() {
                 partitions: vec![],
                 json_path: None,
                 sample: None,
-                index_hints: vec![]
+                index_hints: vec![],
+                has_final: false,
             },
             joins: vec![Join {
                 relation: TableFactor::OpenJsonTable {
@@ -633,7 +639,8 @@ fn parse_mssql_openjson() {
                     alias: table_alias(true, "B")
                 },
                 global: false,
-                join_operator: JoinOperator::CrossApply
+                join_operator: JoinOperator::CrossApply,
+                strictness: None,
             }],
             array_joins: vec![],
         }],
@@ -657,6 +664,7 @@ fn parse_mssql_openjson() {
                 json_path: None,
                 sample: None,
                 index_hints: vec![],
+                has_final: false,
             },
             joins: vec![Join {
                 relation: TableFactor::OpenJsonTable {
@@ -668,7 +676,8 @@ fn parse_mssql_openjson() {
                     alias: table_alias(true, "B")
                 },
                 global: false,
-                join_operator: JoinOperator::CrossApply
+                join_operator: JoinOperator::CrossApply,
+                strictness: None,
             }],
             array_joins: vec![],
         }],
@@ -692,6 +701,7 @@ fn parse_mssql_openjson() {
                 json_path: None,
                 sample: None,
                 index_hints: vec![],
+                has_final: false,
             },
             joins: vec![Join {
                 relation: TableFactor::OpenJsonTable {
@@ -703,7 +713,8 @@ fn parse_mssql_openjson() {
                     alias: table_alias(true, "B")
                 },
                 global: false,
-                join_operator: JoinOperator::CrossApply
+                join_operator: JoinOperator::CrossApply,
+                strictness: None,
             }],
             array_joins: vec![],
         }],

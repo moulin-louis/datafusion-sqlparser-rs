@@ -1006,6 +1006,9 @@ pub struct WildcardAdditionalOptions {
     /// `[AS <alias>]`.
     ///  Redshift syntax: <https://docs.aws.amazon.com/redshift/latest/dg/r_SELECT_list.html>
     pub opt_alias: Option<Ident>,
+    /// `[APPLY ...]`, applied left to right. This list can be empty.
+    ///  Clickhouse syntax: <https://clickhouse.com/docs/sql-reference/statements/select#apply>
+    pub opt_apply: Vec<ApplySelectItem>,
 }
 
 impl Default for WildcardAdditionalOptions {
@@ -1018,6 +1021,7 @@ impl Default for WildcardAdditionalOptions {
             opt_replace: None,
             opt_rename: None,
             opt_alias: None,
+            opt_apply: vec![],
         }
     }
 }
@@ -1042,7 +1046,39 @@ impl fmt::Display for WildcardAdditionalOptions {
         if let Some(alias) = &self.opt_alias {
             write!(f, " AS {alias}")?;
         }
+        for apply in &self.opt_apply {
+            write!(f, " {apply}")?;
+        }
         Ok(())
+    }
+}
+
+/// ClickHouse `APPLY` transformer, calling a function on every column the
+/// wildcard expands to.
+///
+/// # Syntax
+/// ```plaintext
+/// APPLY( <function> )
+/// APPLY <function>
+/// ```
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "visitor", derive(Visit, VisitMut))]
+pub struct ApplySelectItem {
+    /// What to apply: a function name, a call carrying parameters such as
+    /// `quantile(0.5)`, or a lambda.
+    pub expr: Expr,
+    /// Whether the source parenthesized the transformer. ClickHouse accepts
+    /// `APPLY(sum)` and `APPLY sum` alike, and this preserves which was written.
+    pub parenthesized: bool,
+}
+
+impl fmt::Display for ApplySelectItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.parenthesized {
+            true => write!(f, "APPLY({})", self.expr),
+            false => write!(f, "APPLY {}", self.expr),
+        }
     }
 }
 
@@ -1484,6 +1520,13 @@ pub struct TableFunctionArgs {
     /// `SELECT * FROM executable('generate_random.py', TabSeparated, 'id UInt32, random String', SETTINGS send_chunk_header = false, pool_size = 16)`
     /// [`executable` table function](https://clickhouse.com/docs/en/engines/table-functions/executable)
     pub settings: Option<Vec<Setting>>,
+    /// A lone subquery argument, written without parentheses of its own, as
+    /// ClickHouse's `view(SELECT ...)`. Mutually exclusive with `args`:
+    /// ClickHouse rejects `view((SELECT ...))`, so the parentheses cannot be
+    /// added back when rendering.
+    ///
+    /// [`view` table function](https://clickhouse.com/docs/sql-reference/table-functions/view)
+    pub subquery: Option<Box<Query>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
@@ -1617,6 +1660,11 @@ pub enum TableFactor {
         /// Optional index hints(mysql)
         /// See: <https://dev.mysql.com/doc/refman/8.4/en/index-hints.html>
         index_hints: Vec<TableIndexHints>,
+        /// ClickHouse `FINAL` modifier, which merges rows at read time:
+        /// `SELECT * FROM tbl FINAL`, `SELECT * FROM tbl AS t FINAL`.
+        ///
+        /// See: <https://clickhouse.com/docs/sql-reference/statements/select/from#final-modifier>
+        has_final: bool,
     },
     /// A derived table (a parenthesized subquery), optionally `LATERAL`.
     Derived {
@@ -1628,6 +1676,12 @@ pub enum TableFactor {
         alias: Option<TableAlias>,
         /// Optional table sample modifier
         sample: Option<TableSampleKind>,
+        /// ClickHouse `FINAL` modifier. Its parser accepts this after any table
+        /// expression, though only a table backed by a merging engine can
+        /// execute it.
+        ///
+        /// See: <https://clickhouse.com/docs/sql-reference/statements/select/from#final-modifier>
+        has_final: bool,
     },
     /// `TABLE(<expr>)[ AS <alias> ]`
     TableFunction {
@@ -2333,6 +2387,7 @@ impl fmt::Display for TableFactor {
                 json_path,
                 sample,
                 index_hints,
+                has_final,
             } => {
                 name.fmt(f)?;
                 if let Some(json_path) = json_path {
@@ -2343,6 +2398,9 @@ impl fmt::Display for TableFactor {
                 }
                 if let Some(args) = args {
                     write!(f, "(")?;
+                    if let Some(subquery) = &args.subquery {
+                        write!(f, "{subquery}")?;
+                    }
                     write!(f, "{}", display_comma_separated(&args.args))?;
                     if let Some(ref settings) = args.settings {
                         if !args.args.is_empty() {
@@ -2370,6 +2428,12 @@ impl fmt::Display for TableFactor {
                 if let Some(version) = version {
                     write!(f, " {version}")?;
                 }
+                // ClickHouse writes `<name> [AS <alias>] FINAL [SAMPLE ...]`:
+                // after the alias, before the sample. It rejects both
+                // `tbl FINAL AS t` and `tbl SAMPLE 1/2 FINAL`.
+                if *has_final {
+                    write!(f, " FINAL")?;
+                }
                 if let Some(TableSampleKind::AfterTableAlias(sample)) = sample {
                     write!(f, " {sample}")?;
                 }
@@ -2380,6 +2444,7 @@ impl fmt::Display for TableFactor {
                 subquery,
                 alias,
                 sample,
+                has_final,
             } => {
                 if *lateral {
                     write!(f, "LATERAL ")?;
@@ -2391,6 +2456,9 @@ impl fmt::Display for TableFactor {
                 f.write_str(")")?;
                 if let Some(alias) = alias {
                     write!(f, " {alias}")?;
+                }
+                if *has_final {
+                    write!(f, " FINAL")?;
                 }
                 if let Some(TableSampleKind::AfterTableAlias(sample)) = sample {
                     write!(f, " {sample}")?;
@@ -2777,8 +2845,41 @@ pub struct Join {
     /// ClickHouse supports the optional `GLOBAL` keyword before the join operator.
     /// See [ClickHouse](https://clickhouse.com/docs/en/sql-reference/statements/select/join)
     pub global: bool,
+    /// ClickHouse `ANY`/`ALL` strictness, deciding how many rows a match may
+    /// produce. `ALL` is the default.
+    ///
+    /// The other strictness modifiers ClickHouse documents -- `SEMI`, `ANTI`
+    /// and `ASOF` -- change which rows are emitted rather than how many, and
+    /// are carried by [`JoinOperator`] instead.
+    ///
+    /// See [ClickHouse](https://clickhouse.com/docs/sql-reference/statements/select/join)
+    pub strictness: Option<JoinStrictness>,
     /// The join operator and its constraint (INNER/LEFT/RIGHT/CROSS/ASOF/etc.).
     pub join_operator: JoinOperator,
+}
+
+/// ClickHouse join strictness: how many matching rows a join may produce.
+///
+/// Written either before or after the join kind -- `ANY LEFT JOIN` and
+/// `LEFT ANY JOIN` are the same join -- and rendered back in ClickHouse's
+/// documented order, before the kind.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "visitor", derive(Visit, VisitMut))]
+pub enum JoinStrictness {
+    /// `ANY`: at most one matching row from the right table.
+    Any,
+    /// `ALL`: every matching row, which is the default.
+    All,
+}
+
+impl fmt::Display for JoinStrictness {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            JoinStrictness::Any => "ANY",
+            JoinStrictness::All => "ALL",
+        })
+    }
 }
 
 impl fmt::Display for Join {
@@ -2806,6 +2907,9 @@ impl fmt::Display for Join {
         }
         if self.global {
             write!(f, "GLOBAL ")?;
+        }
+        if let Some(strictness) = self.strictness {
+            write!(f, "{strictness} ")?;
         }
 
         match &self.join_operator {
@@ -3215,11 +3319,18 @@ pub enum LimitClause {
         limit_by: Vec<Expr>,
     },
     /// MySQL-specific syntax: `LIMIT <offset>, <limit>` (order reversed).
+    ///
+    /// ClickHouse allows `BY` here too, and normalizes `LIMIT <limit> OFFSET
+    /// <offset> BY <expr>` into this form.
+    ///
+    /// `LIMIT <offset>, <limit> [BY <expr>,<expr>,...]`
     OffsetCommaLimit {
         /// The offset expression.
         offset: Expr,
         /// The limit expression.
         limit: Expr,
+        /// Optional `BY { <expr>,... }` list used by some dialects (ClickHouse).
+        limit_by: Vec<Expr>,
     },
 }
 
@@ -3243,8 +3354,16 @@ impl fmt::Display for LimitClause {
                 }
                 Ok(())
             }
-            LimitClause::OffsetCommaLimit { offset, limit } => {
-                write!(f, " LIMIT {offset}, {limit}")
+            LimitClause::OffsetCommaLimit {
+                offset,
+                limit,
+                limit_by,
+            } => {
+                write!(f, " LIMIT {offset}, {limit}")?;
+                if !limit_by.is_empty() {
+                    write!(f, " BY {}", display_separated(limit_by, ", "))?;
+                }
+                Ok(())
             }
         }
     }

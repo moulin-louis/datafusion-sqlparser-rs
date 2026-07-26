@@ -95,19 +95,20 @@ pub use self::dml::{
 };
 pub use self::operator::{BinaryOperator, UnaryOperator};
 pub use self::query::{
-    AfterMatchSkip, ArrayJoin, ArrayJoinKind, ConnectByKind, Cte, CteAsMaterialized, Distinct,
-    EmptyMatchesMode, ExceptSelectItem, ExcludeSelectItem, ExprWithAlias, ExprWithAliasAndOrderBy,
-    Fetch, ForClause, ForJson, ForXml, FormatClause, GroupByExpr, GroupByWithModifier,
-    IdentWithAlias, IlikeSelectItem, InputFormatClause, Interpolate, InterpolateExpr, Join,
-    JoinConstraint, JoinOperator, JsonTableColumn, JsonTableColumnErrorHandling,
-    JsonTableNamedColumn, JsonTableNestedColumn, LateralView, LimitClause, LockClause, LockType,
-    MatchRecognizePattern, MatchRecognizeSymbol, Measure, NamedWindowDefinition, NamedWindowExpr,
-    NonBlock, Offset, OffsetRows, OpenJsonTableColumn, OrderBy, OrderByExpr, OrderByKind,
-    OrderByOptions, OrderBySort, PipeOperator, PivotValueSource, ProjectionSelect, Query,
-    RenameSelectItem, RepetitionQuantifier, ReplaceSelectElement, ReplaceSelectItem, RowsPerMatch,
-    ScalarWithItem, Select, SelectFlavor, SelectInto, SelectItem, SelectItemQualifiedWildcardKind,
-    SelectModifiers, SetExpr, SetOperator, SetQuantifier, Setting, SymbolDefinition, Table,
-    TableAlias, TableAliasColumnDef, TableFactor, TableFunctionArgs, TableIndexHintForClause,
+    AfterMatchSkip, ApplySelectItem, ArrayJoin, ArrayJoinKind, ConnectByKind, Cte,
+    CteAsMaterialized, Distinct, EmptyMatchesMode, ExceptSelectItem, ExcludeSelectItem,
+    ExprWithAlias, ExprWithAliasAndOrderBy, Fetch, ForClause, ForJson, ForXml, FormatClause,
+    GroupByExpr, GroupByWithModifier, IdentWithAlias, IlikeSelectItem, InputFormatClause,
+    Interpolate, InterpolateExpr, Join, JoinConstraint, JoinOperator, JoinStrictness,
+    JsonTableColumn, JsonTableColumnErrorHandling, JsonTableNamedColumn, JsonTableNestedColumn,
+    LateralView, LimitClause, LockClause, LockType, MatchRecognizePattern, MatchRecognizeSymbol,
+    Measure, NamedWindowDefinition, NamedWindowExpr, NonBlock, Offset, OffsetRows,
+    OpenJsonTableColumn, OrderBy, OrderByExpr, OrderByKind, OrderByOptions, OrderBySort,
+    PipeOperator, PivotValueSource, ProjectionSelect, Query, RenameSelectItem,
+    RepetitionQuantifier, ReplaceSelectElement, ReplaceSelectItem, RowsPerMatch, ScalarWithItem,
+    Select, SelectFlavor, SelectInto, SelectItem, SelectItemQualifiedWildcardKind, SelectModifiers,
+    SetExpr, SetOperator, SetQuantifier, Setting, SymbolDefinition, Table, TableAlias,
+    TableAliasColumnDef, TableFactor, TableFunctionArgs, TableIndexHintForClause,
     TableIndexHintType, TableIndexHints, TableIndexType, TableSample, TableSampleBucket,
     TableSampleKind, TableSampleMethod, TableSampleModifier, TableSampleQuantity, TableSampleSeed,
     TableSampleSeedModifier, TableSampleUnit, TableVersion, TableWithJoins, Top, TopQuantity,
@@ -1004,6 +1005,18 @@ pub enum Expr {
         /// `true` when the `NOT` modifier is present.
         negated: bool,
     },
+    /// ClickHouse ternary conditional: `<condition> ? <then> : <else>`,
+    /// a synonym for `if(<condition>, <then>, <else>)`.
+    ///
+    /// See <https://clickhouse.com/docs/sql-reference/operators#conditional-expression>
+    Ternary {
+        /// The condition being tested.
+        condition: Box<Expr>,
+        /// Result when the condition holds.
+        then_branch: Box<Expr>,
+        /// Result otherwise.
+        else_branch: Box<Expr>,
+    },
     /// `<expr> [ NOT ] BETWEEN <low> AND <high>`
     Between {
         /// Expression being compared.
@@ -1814,6 +1827,11 @@ impl fmt::Display for Expr {
                 if *negated { "NOT " } else { "" },
                 table
             ),
+            Expr::Ternary {
+                condition,
+                then_branch,
+                else_branch,
+            } => write!(f, "{condition} ? {then_branch} : {else_branch}"),
             Expr::Between {
                 expr,
                 negated,
