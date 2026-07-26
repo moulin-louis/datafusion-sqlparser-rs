@@ -1375,6 +1375,12 @@ impl<'a> Parser<'a> {
                                 AttachedToken(next_token),
                             ));
                         }
+                        Token::Number(_, _) if self.dialect.supports_numeric_field_access() => {
+                            // Positional field access such as ClickHouse's `t.2` is
+                            // never a wildcard, so rewind and parse it as a regular
+                            // expression below.
+                            break;
+                        }
                         _ => {
                             return self.expected("an identifier or a '*' after '.'", next_token);
                         }

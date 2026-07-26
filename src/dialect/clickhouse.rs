@@ -71,6 +71,13 @@ impl Dialect for ClickHouseDialect {
         true
     }
 
+    /// ClickHouse tuples support 1-based positional access, e.g. `SELECT t.2 FROM t`.
+    ///
+    /// [ClickHouse tuple](https://clickhouse.com/docs/sql-reference/data-types/tuple)
+    fn supports_numeric_field_access(&self) -> bool {
+        true
+    }
+
     fn supports_partition_by_after_order_by(&self) -> bool {
         true
     }
