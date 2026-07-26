@@ -2272,6 +2272,8 @@ impl Spanned for JoinOperator {
                 match_condition,
                 constraint,
             } => match_condition.span().union(&constraint.span()),
+            JoinOperator::AsOfJoin(join_constraint) => join_constraint.span(),
+            JoinOperator::AsOfLeftJoin(join_constraint) => join_constraint.span(),
             JoinOperator::Anti(join_constraint) => join_constraint.span(),
             JoinOperator::Semi(join_constraint) => join_constraint.span(),
             JoinOperator::StraightJoin(join_constraint) => join_constraint.span(),
