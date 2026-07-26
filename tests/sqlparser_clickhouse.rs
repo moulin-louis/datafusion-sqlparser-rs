@@ -1032,6 +1032,55 @@ fn parse_limit_by() {
 }
 
 #[test]
+fn parse_limit_by_with_offset() {
+    // `BY` comes last, after either spelling of the offset. ClickHouse reads
+    // both of these as `LIMIT 1, 2 BY a`.
+    clickhouse_and_generic().verified_stmt("SELECT a FROM t LIMIT 1, 2 BY a");
+    clickhouse_and_generic().verified_stmt("SELECT a FROM t LIMIT 2 OFFSET 1 BY a");
+    clickhouse_and_generic().verified_stmt("SELECT a FROM t LIMIT 1, 2 BY a, b");
+
+    match clickhouse_and_generic()
+        .verified_query("SELECT a FROM t LIMIT 1, 2 BY a")
+        .limit_clause
+    {
+        Some(LimitClause::OffsetCommaLimit {
+            offset,
+            limit,
+            limit_by,
+        }) => {
+            assert_eq!(offset.to_string(), "1");
+            assert_eq!(limit.to_string(), "2");
+            assert_eq!(limit_by.len(), 1);
+            assert_eq!(limit_by[0].to_string(), "a");
+        }
+        other => panic!("expected LIMIT <offset>, <limit> BY, got {other:?}"),
+    }
+
+    match clickhouse_and_generic()
+        .verified_query("SELECT a FROM t LIMIT 2 OFFSET 1 BY a")
+        .limit_clause
+    {
+        Some(LimitClause::LimitOffset {
+            limit,
+            offset,
+            limit_by,
+        }) => {
+            assert_eq!(limit.map(|l| l.to_string()).as_deref(), Some("2"));
+            assert_eq!(offset.map(|o| o.to_string()).as_deref(), Some("OFFSET 1"));
+            assert_eq!(limit_by[0].to_string(), "a");
+        }
+        other => panic!("expected LIMIT ... OFFSET ... BY, got {other:?}"),
+    }
+
+    // ClickHouse requires `BY` after the offset. This has always accepted the
+    // other order as well, and renders it back in the accepted one.
+    clickhouse_and_generic().one_statement_parses_to(
+        "SELECT a FROM t LIMIT 2 BY a OFFSET 1",
+        "SELECT a FROM t LIMIT 2 OFFSET 1 BY a",
+    );
+}
+
+#[test]
 fn parse_settings_in_query() {
     fn check_settings(sql: &str, expected: Vec<Setting>) {
         match clickhouse_and_generic().verified_stmt(sql) {

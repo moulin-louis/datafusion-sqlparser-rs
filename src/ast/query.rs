@@ -3261,11 +3261,18 @@ pub enum LimitClause {
         limit_by: Vec<Expr>,
     },
     /// MySQL-specific syntax: `LIMIT <offset>, <limit>` (order reversed).
+    ///
+    /// ClickHouse allows `BY` here too, and normalizes `LIMIT <limit> OFFSET
+    /// <offset> BY <expr>` into this form.
+    ///
+    /// `LIMIT <offset>, <limit> [BY <expr>,<expr>,...]`
     OffsetCommaLimit {
         /// The offset expression.
         offset: Expr,
         /// The limit expression.
         limit: Expr,
+        /// Optional `BY { <expr>,... }` list used by some dialects (ClickHouse).
+        limit_by: Vec<Expr>,
     },
 }
 
@@ -3289,8 +3296,16 @@ impl fmt::Display for LimitClause {
                 }
                 Ok(())
             }
-            LimitClause::OffsetCommaLimit { offset, limit } => {
-                write!(f, " LIMIT {offset}, {limit}")
+            LimitClause::OffsetCommaLimit {
+                offset,
+                limit,
+                limit_by,
+            } => {
+                write!(f, " LIMIT {offset}, {limit}")?;
+                if !limit_by.is_empty() {
+                    write!(f, " BY {}", display_separated(limit_by, ", "))?;
+                }
+                Ok(())
             }
         }
     }

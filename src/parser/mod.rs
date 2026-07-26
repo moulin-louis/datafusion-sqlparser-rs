@@ -13523,19 +13523,20 @@ impl<'a> Parser<'a> {
                         "Missing offset for LIMIT <offset>, <limit>".to_string(),
                     )
                 })?;
+                let limit = self.parse_expr()?;
+                // ClickHouse accepts `BY` after the comma form too, and
+                // normalizes `LIMIT <n> OFFSET <m> BY <expr>` into it.
+                let limit_by = self.parse_optional_limit_by()?;
                 return Ok(Some(LimitClause::OffsetCommaLimit {
                     offset,
-                    limit: self.parse_expr()?,
+                    limit,
+                    limit_by,
                 }));
             }
 
-            let limit_by = if self.dialect.supports_limit_by() && self.parse_keyword(Keyword::BY) {
-                Some(self.parse_comma_separated(Parser::parse_expr)?)
-            } else {
-                None
-            };
+            let limit_by = self.parse_optional_limit_by()?;
 
-            (Some(expr), limit_by)
+            (Some(expr), Some(limit_by))
         } else {
             (None, None)
         };
@@ -13544,7 +13545,17 @@ impl<'a> Parser<'a> {
             offset = Some(self.parse_offset()?);
         }
 
-        if offset.is_some() || (limit.is_some() && limit != Some(None)) || limit_by.is_some() {
+        // `LIMIT <n> OFFSET <m> BY <expr>`: ClickHouse puts `BY` last, so it is
+        // only reachable once the offset has been consumed.
+        let limit_by = match limit_by {
+            Some(limit_by) if limit_by.is_empty() => Some(self.parse_optional_limit_by()?),
+            limit_by => limit_by,
+        };
+
+        if offset.is_some()
+            || (limit.is_some() && limit != Some(None))
+            || limit_by.as_ref().is_some_and(|by| !by.is_empty())
+        {
             Ok(Some(LimitClause::LimitOffset {
                 limit: limit.unwrap_or_default(),
                 offset,
@@ -13552,6 +13563,18 @@ impl<'a> Parser<'a> {
             }))
         } else {
             Ok(None)
+        }
+    }
+
+    /// Parse an optional ClickHouse `BY <expr>, ...` following a `LIMIT`.
+    ///
+    /// Returns an empty list when the dialect lacks the feature or there is no
+    /// `BY`.
+    fn parse_optional_limit_by(&mut self) -> Result<Vec<Expr>, ParserError> {
+        if self.dialect.supports_limit_by() && self.parse_keyword(Keyword::BY) {
+            self.parse_comma_separated(Parser::parse_expr)
+        } else {
+            Ok(vec![])
         }
     }
 
