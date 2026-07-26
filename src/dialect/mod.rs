@@ -366,6 +366,18 @@ pub trait Dialect: Debug + Any {
         false
     }
 
+    /// Returns true if the dialect supports the ClickHouse `GLOBAL IN` / `GLOBAL NOT IN`
+    /// operators, e.g. `SELECT * FROM t WHERE a GLOBAL IN (SELECT b FROM u)`.
+    ///
+    /// `GLOBAL IN` is the distributed-query variant of `IN`: the right-hand side is
+    /// evaluated once on the initiator node and broadcast to the shards, instead of
+    /// being evaluated on each shard. It is otherwise equivalent to `IN`.
+    ///
+    /// <https://clickhouse.com/docs/sql-reference/operators/in>
+    fn supports_global_in(&self) -> bool {
+        false
+    }
+
     /// Returns true if the dialect treats `ALTER USER` as a synonym for `ALTER ROLE`.
     ///
     /// In PostgreSQL, `ALTER USER` and `ALTER ROLE` are synonyms that accept the same
@@ -868,6 +880,22 @@ pub trait Dialect: Debug + Any {
             }
             Token::Word(w) if w.keyword == Keyword::NOTNULL && self.supports_notnull_operator() => {
                 Ok(p!(Is))
+            }
+            // ClickHouse `GLOBAL IN` / `GLOBAL NOT IN` behave exactly like `IN` / `NOT IN`
+            // as far as precedence is concerned.
+            Token::Word(w) if w.keyword == Keyword::GLOBAL && self.supports_global_in() => {
+                let followed_by_in = match &parser.peek_nth_token_ref(1).token {
+                    Token::Word(w) if w.keyword == Keyword::IN => true,
+                    Token::Word(w) if w.keyword == Keyword::NOT => {
+                        matches!(&parser.peek_nth_token_ref(2).token, Token::Word(w) if w.keyword == Keyword::IN)
+                    }
+                    _ => false,
+                };
+                if followed_by_in {
+                    Ok(p!(Between))
+                } else {
+                    Ok(self.prec_unknown())
+                }
             }
             Token::Word(w) if w.keyword == Keyword::IS => Ok(p!(Is)),
             Token::Word(w) if w.keyword == Keyword::IN => Ok(p!(Between)),

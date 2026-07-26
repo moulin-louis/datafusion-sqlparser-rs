@@ -1869,6 +1869,86 @@ fn parse_in_unparenthesized_dictionary_placeholder() {
     clickhouse().verified_expr("x IN ({p: Array(UInt64)}) AND y = 1");
 }
 
+#[test]
+fn parse_global_in_subquery() {
+    let sql = "SELECT * FROM logs WHERE user_id GLOBAL IN (SELECT id FROM vip_users)";
+    let select = clickhouse_and_generic().verified_only_select(sql);
+    assert_eq!(
+        Expr::InSubquery {
+            expr: Box::new(Expr::Identifier(Ident::new("user_id"))),
+            subquery: Box::new(clickhouse_and_generic().verified_query("SELECT id FROM vip_users")),
+            negated: false,
+            global: true,
+        },
+        select.selection.unwrap()
+    );
+
+    clickhouse_and_generic().verified_stmt(
+        "SELECT number FROM numbers(10) WHERE number GLOBAL IN (SELECT number FROM numbers(5))",
+    );
+}
+
+#[test]
+fn parse_global_not_in_subquery() {
+    let sql = "SELECT * FROM logs WHERE path GLOBAL NOT IN (SELECT p FROM blocked_paths)";
+    let select = clickhouse_and_generic().verified_only_select(sql);
+    assert_eq!(
+        Expr::InSubquery {
+            expr: Box::new(Expr::Identifier(Ident::new("path"))),
+            subquery: Box::new(
+                clickhouse_and_generic().verified_query("SELECT p FROM blocked_paths")
+            ),
+            negated: true,
+            global: true,
+        },
+        select.selection.unwrap()
+    );
+}
+
+#[test]
+fn parse_global_in_list() {
+    let sql = "SELECT * FROM logs WHERE user_id GLOBAL IN (1, 2, 3)";
+    let select = clickhouse_and_generic().verified_only_select(sql);
+    assert_eq!(
+        Expr::InList {
+            expr: Box::new(Expr::Identifier(Ident::new("user_id"))),
+            list: vec![
+                Expr::value(number("1")),
+                Expr::value(number("2")),
+                Expr::value(number("3")),
+            ],
+            negated: false,
+            global: true,
+        },
+        select.selection.unwrap()
+    );
+
+    clickhouse_and_generic().verified_stmt("SELECT * FROM logs WHERE user_id GLOBAL NOT IN (1, 2)");
+}
+
+#[test]
+fn parse_global_in_combined_with_and() {
+    // `GLOBAL IN` must not swallow the rest of the `WHERE` clause.
+    clickhouse_and_generic().verified_stmt(
+        "SELECT * FROM logs.access WHERE user_id GLOBAL IN (SELECT id FROM dim.vip_users) AND path GLOBAL NOT IN (SELECT p FROM conf.blocked_paths)",
+    );
+}
+
+#[test]
+fn parse_global_in_unsupported_by_other_dialects() {
+    // Dialects that do not opt into `supports_global_in` must not accept the syntax.
+    let dialects = all_dialects_except(|d| d.supports_global_in());
+    assert!(dialects
+        .parse_sql_statements("SELECT * FROM logs WHERE user_id GLOBAL IN (SELECT id FROM t)")
+        .is_err());
+    assert!(dialects
+        .parse_sql_statements("SELECT * FROM logs WHERE user_id GLOBAL NOT IN (1, 2)")
+        .is_err());
+
+    // `GLOBAL` in other positions keeps working in ClickHouse.
+    clickhouse().verified_stmt("SELECT * FROM a GLOBAL FULL JOIN b ON a.id = b.id");
+}
+
 fn clickhouse() -> TestedDialects {
     TestedDialects::new(vec![Box::new(ClickHouseDialect {})])
 }

@@ -53,6 +53,10 @@ impl Dialect for GenericDialect {
         true
     }
 
+    fn supports_global_in(&self) -> bool {
+        true
+    }
+
     fn supports_group_by_expr(&self) -> bool {
         true
     }
